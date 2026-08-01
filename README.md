@@ -2,6 +2,12 @@
 
 A Discord library for Gleam
 
+Glyde is currently pre-1.0.0 release, so please try it out but be wary of papercuts.
+
+```sh
+gleam add glyde
+```
+
 Here's an example bot that answers `!ping` and counts how many it has sent:
 
 ```gleam
