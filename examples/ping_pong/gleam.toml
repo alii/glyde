@@ -1,0 +1,9 @@
+name = "ping_pong"
+version = "1.0.0"
+
+# glyde brings its own socket, timers, clock and HTTP client, so the only thing
+# left for a host is reading the token out of the environment.
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+envoy = ">= 1.0.0 and < 2.0.0"
+glyde = { path = "../.." }

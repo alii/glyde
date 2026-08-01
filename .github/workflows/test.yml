@@ -1,0 +1,49 @@
+name: test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "29"
+          gleam-version: "1.17.0"
+          rebar3-version: "3"
+      - run: gleam deps download
+      - run: gleam test
+
+  # The example is the only consumer of glyde's public API from outside the
+  # package, so compiling it catches a breaking change the library's own tests
+  # cannot see.
+  example:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: examples/ping_pong
+    steps:
+      - uses: actions/checkout@v6
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "29"
+          gleam-version: "1.17.0"
+          rebar3-version: "3"
+      - run: gleam deps download
+      - run: gleam build
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "29"
+          gleam-version: "1.17.0"
+          rebar3-version: "3"
+      - run: gleam format --check src test
