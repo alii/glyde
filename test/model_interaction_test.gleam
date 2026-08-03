@@ -838,14 +838,23 @@ pub fn an_expired_budget_is_zero_test() {
     == 0
 }
 
-/// `id.from_string` does not validate, so an id that is not a snowflake can
-/// reach here. 0 makes the caller defer rather than gamble.
+/// The decoder rejects a non-snowflake id, but `id.from_string` does not, so
+/// one can still reach here. 0 makes the caller defer rather than gamble.
 pub fn a_budget_for_an_unparseable_id_is_zero_test() {
-  let assert Ok(odd) =
+  let assert Ok(fine) =
+    parse(
+      "{\"id\":\"1\",\"application_id\":\"2\",\"type\":1,\"token\":\"t\",\"version\":1}",
+    )
+  let odd =
+    interaction.Interaction(..fine, id: id.from_string("not-a-snowflake"))
+  assert interaction.remaining_response_budget_ms(odd, now_ms: 0) == 0
+}
+
+pub fn a_non_snowflake_id_fails_the_decode_test() {
+  let assert Error(_) =
     parse(
       "{\"id\":\"not-a-snowflake\",\"application_id\":\"2\",\"type\":1,\"token\":\"t\",\"version\":1}",
     )
-  assert interaction.remaining_response_budget_ms(odd, now_ms: 0) == 0
 }
 
 /// One unknown enum value must not fail the whole INTERACTION_CREATE.

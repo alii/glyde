@@ -4,10 +4,10 @@
 //// Each is tagged with what it identifies, so swapping the two snowflakes in
 //// `/channels/{channel_id}/messages/{message_id}` will not compile.
 
+import gleam/bit_array
 import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import gleam/json.{type Json}
-import gleam/list
 import gleam/order.{type Order}
 import gleam/string
 
@@ -173,23 +173,34 @@ pub fn retag(id: Id(a), to _tag: Tag(b)) -> Id(b) {
 /// a snowflake, which is every ID Discord issues. Rejects `@me` and anything
 /// with a path separator.
 pub fn parse(text: String) -> Result(Id(kind), Nil) {
-  case string.to_graphemes(text) {
-    [] -> Error(Nil)
-    ["0"] -> Ok(Id(text))
-    ["0", ..] -> Error(Nil)
-    chars ->
+  case text {
+    "0" -> Ok(Id(text))
+    "0" <> _ -> Error(Nil)
+    _ ->
       // The numeric bound, not a digit count: 20 digits also spells values
       // above 2^64 - 1, and `created_at_ms` has to read everything parse takes.
-      case list.all(chars, is_digit), int.parse(text) {
+      case is_digits(text), int.parse(text) {
         True, Ok(snowflake) if snowflake <= max_snowflake -> Ok(Id(text))
         _, _ -> Error(Nil)
       }
   }
 }
 
-fn is_digit(c: String) -> Bool {
-  case c {
-    "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" -> True
+/// 2^64 - 1 is 20 digits; anything longer is not a snowflake.
+const max_digits: Int = 20
+
+/// One to twenty ASCII digits and nothing else. A byte walk, so no grapheme
+/// list and no bignum parse: this runs on every ID in every payload.
+fn is_digits(text: String) -> Bool {
+  let bytes = <<text:utf8>>
+  let size = bit_array.byte_size(bytes)
+  size >= 1 && size <= max_digits && all_digits(bytes)
+}
+
+fn all_digits(bytes: BitArray) -> Bool {
+  case bytes {
+    <<>> -> True
+    <<c, rest:bytes>> if c >= 0x30 && c <= 0x39 -> all_digits(rest)
     _ -> False
   }
 }
@@ -246,8 +257,25 @@ pub fn to_json(id: Id(kind)) -> Json {
   json.string(id.text)
 }
 
-/// Strings only: Discord always sends a snowflake as a JSON string, so a
-/// number in that slot is a malformed payload.
+/// A JSON string of one to twenty digits. Discord always sends a snowflake as
+/// a string, so a number in that slot, or text that is not digits, fails.
 pub fn decoder() -> Decoder(Id(kind)) {
-  decode.string |> decode.map(Id)
+  use text <- decode.then(decode.string)
+  case is_digits(text) {
+    True -> decode.success(Id(text))
+    False -> decode.failure(Id(""), "Snowflake")
+  }
+}
+
+/// `decoder`, but a JSON number is read too. For the one field Discord
+/// documents as either: `not_found` in GUILD_MEMBERS_CHUNK.
+pub fn lenient_decoder() -> Decoder(Id(kind)) {
+  decode.one_of(decoder(), or: [
+    decode.then(decode.int, fn(n) {
+      case n >= 0 && n <= max_snowflake {
+        True -> decode.success(Id(int.to_string(n)))
+        False -> decode.failure(Id(""), "Snowflake")
+      }
+    }),
+  ])
 }

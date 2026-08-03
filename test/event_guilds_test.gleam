@@ -139,7 +139,7 @@ pub fn members_chunk_not_found_survives_a_json_number_test() {
       "{\"guild_id\":\"10\",\"members\":[],\"chunk_index\":1,\"chunk_count\":3,\"not_found\":[\"77\",41],\"nonce\":\"abc\"}",
     )
 
-  assert chunk.not_found == ["77", "41"]
+  assert chunk.not_found == [id.from_string("77"), id.from_string("41")]
   assert chunk.chunk_index == 1
   assert chunk.chunk_count == 3
   assert chunk.nonce == Some("abc")
@@ -154,7 +154,7 @@ pub fn members_chunk_not_found_takes_a_full_width_number_test() {
       "{\"guild_id\":\"10\",\"members\":[],\"chunk_index\":0,\"chunk_count\":1,\"not_found\":[123456789012345678]}",
     )
 
-  assert chunk.not_found == ["123456789012345678"]
+  assert chunk.not_found == [id.from_string("123456789012345678")]
 }
 
 /// Discord drops a nonce over 32 bytes silently, so the chunk comes back

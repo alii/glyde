@@ -169,3 +169,28 @@ pub fn created_at_matches_compare_test() {
   assert id.compare(older, newer) == order.Lt
   assert a < b
 }
+
+pub fn decoder_takes_digit_strings_only_test() {
+  let ok = fn(text) { json.parse("\"" <> text <> "\"", id.decoder()) }
+  let assert Ok(_) = ok("0")
+  let assert Ok(_) = ok("41771983423143937")
+  // Twenty digits is the ceiling: 2^64 - 1 is that wide.
+  let assert Ok(_) = ok("18446744073709551615")
+  let assert Error(_) = ok("")
+  let assert Error(_) = ok("123456789012345678901")
+  let assert Error(_) = ok("12a")
+  let assert Error(_) = ok(" 12")
+  let assert Error(_) = ok("-1")
+  let assert Error(_) = ok("１２")
+  // A JSON number in a snowflake slot is malformed.
+  let assert Error(_) = json.parse("41771983423143937", id.decoder())
+}
+
+pub fn lenient_decoder_reads_a_number_too_test() {
+  let assert Ok(a) = json.parse("77", id.lenient_decoder())
+  let assert Ok(b) = json.parse("\"77\"", id.lenient_decoder())
+  assert id.to_string(a) == "77"
+  assert a == b
+  let assert Error(_) = json.parse("-1", id.lenient_decoder())
+  let assert Error(_) = json.parse("\"x\"", id.lenient_decoder())
+}

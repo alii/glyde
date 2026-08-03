@@ -2,7 +2,6 @@
 //// and emojis. Decoders take the constructor to build, so `Event` stays out.
 
 import gleam/dynamic/decode.{type Decoder}
-import gleam/int
 import gleam/option.{type Option}
 import glyde/id
 import glyde/model/emoji
@@ -22,7 +21,7 @@ pub type MembersChunk {
     chunk_count: Int,
     /// Echoes the request back, so this is whatever the caller sent, a real
     /// snowflake or not. A String, never an `Id`.
-    not_found: List(String),
+    not_found: List(id.UserId),
     /// Absent when the request's nonce was over 32 bytes, which Discord drops
     /// silently.
     nonce: Option(String),
@@ -105,7 +104,7 @@ pub fn members_chunk_decoder() -> Decoder(MembersChunk) {
   use members <- decode.field("members", decode.list(member.decoder()))
   use chunk_index <- decode.field("chunk_index", wire.integer())
   use chunk_count <- decode.field("chunk_count", wire.integer())
-  use not_found <- wire.list_field("not_found", snowflake_or_number())
+  use not_found <- wire.list_field("not_found", id.lenient_decoder())
   use nonce <- wire.opt_field("nonce", decode.string)
   decode.success(MembersChunk(
     guild_id:,
@@ -126,15 +125,4 @@ fn keyed_decoder(
   use guild_id <- decode.field("guild_id", id.decoder())
   use value <- decode.field(key, inner)
   decode.success(build(guild_id, value))
-}
-
-/// A snowflake that can come back as a JSON number, because that is what the
-/// caller sent. Only `GUILD_MEMBERS_CHUNK.not_found` does this.
-///
-/// `decode.int` and not `wire.integer()`: every snowflake is 17 to 19 digits,
-/// which is past that helper's 2^53 ceiling. A bare number is already rounded
-/// by any JSON parser working in doubles, which is why glyde sends snowflakes
-/// as strings.
-fn snowflake_or_number() -> Decoder(String) {
-  decode.one_of(decode.string, or: [decode.map(decode.int, int.to_string)])
 }
