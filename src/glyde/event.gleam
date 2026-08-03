@@ -4,24 +4,30 @@
 //// back as `Raw` with `d` untouched, so a host's `case` needs no error arm.
 //// `dispatch` is the same decode with the outcome kept apart, which is how
 //// glyde's own schema drift is told from an event it never modelled.
+////
+//// The payload records and their decoders live in `glyde/event/*`, one module
+//// per family. This module is the sum type and the table that routes to them.
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode.{type Decoder}
-import gleam/float
-import gleam/int
 import gleam/option.{type Option, None, Some}
+import glyde/event/channels
+import glyde/event/guilds
+import glyde/event/messages
+import glyde/event/presence
+import glyde/event/session
+import glyde/event/voice
 import glyde/id
 import glyde/model/channel
 import glyde/model/emoji
 import glyde/model/guild
 import glyde/model/interaction
 import glyde/model/member
-import glyde/model/message.{type ReactionType}
+import glyde/model/message
 import glyde/model/ready
 import glyde/model/role
 import glyde/model/user
 import glyde/model/voice_state
-import glyde/wire
 
 /// One decoded dispatch.
 pub type Event {
@@ -35,7 +41,7 @@ pub type Event {
 
   /// RATE_LIMITED. A dispatch, not an opcode: it arrives with `"op":0` and
   /// advances the sequence, so a client switching on `op` never sees it.
-  RateLimitedEvent(RateLimited)
+  RateLimitedEvent(session.RateLimited)
 
   /// GUILD_CREATE for a guild that is up. Sent on connect for every guild the
   /// bot is in, then again whenever it joins one.
@@ -65,7 +71,7 @@ pub type Event {
   GuildMemberUpdate(guild_id: id.GuildId, member: member.GuildMember)
 
   /// The answer to REQUEST_GUILD_MEMBERS, at most 1000 members per chunk.
-  GuildMembersChunk(MembersChunk)
+  GuildMembersChunk(guilds.MembersChunk)
 
   GuildRoleCreate(guild_id: id.GuildId, role: role.Role)
 
@@ -133,10 +139,10 @@ pub type Event {
     guild_id: Option(id.GuildId),
   )
 
-  MessageReactionAdd(ReactionAdd)
+  MessageReactionAdd(messages.ReactionAdd)
 
-  /// Not a mirror of the add. See `ReactionRemove`.
-  MessageReactionRemove(ReactionRemove)
+  /// Not a mirror of the add. See `messages.ReactionRemove`.
+  MessageReactionRemove(messages.ReactionRemove)
 
   /// Every reaction on the message is gone.
   MessageReactionRemoveAll(
@@ -156,7 +162,7 @@ pub type Event {
   /// Ungated: a bot with no intents still gets every interaction.
   InteractionCreate(interaction: interaction.Interaction)
 
-  TypingStartEvent(TypingStart)
+  TypingStartEvent(presence.TypingStart)
 
   /// The bot's own user changed. Not sent for anyone else.
   UserUpdate(user: user.User)
@@ -176,104 +182,6 @@ pub type Event {
   /// A dispatch glyde did not model, or one whose `d` did not fit, with `d`
   /// intact. `is_modelled` tells those apart; `dispatch` gives the errors.
   Raw(name: String, data: Dynamic)
-}
-
-/// Not a mirror of `ReactionRemove`: the add carries `member`,
-/// `message_author_id` and `burst_colors`, and the remove carries none.
-pub type ReactionAdd {
-  ReactionAdd(
-    user_id: id.UserId,
-    channel_id: id.ChannelId,
-    message_id: id.MessageId,
-    guild_id: Option(id.GuildId),
-    /// Present on a guild reaction, absent in a DM.
-    member: Option(member.GuildMember),
-    /// Partial: `id` and `name` only, and `id` is null for a unicode emoji.
-    emoji: emoji.Emoji,
-    /// Who wrote the message being reacted to. Absent on an older payload.
-    message_author_id: Option(id.UserId),
-    burst: Bool,
-    /// Hex colours of the burst animation, as sent.
-    burst_colors: List(String),
-    type_: ReactionType,
-  )
-}
-
-/// Three fields fewer than `ReactionAdd`, which is Discord's shape.
-pub type ReactionRemove {
-  ReactionRemove(
-    user_id: id.UserId,
-    channel_id: id.ChannelId,
-    message_id: id.MessageId,
-    guild_id: Option(id.GuildId),
-    emoji: emoji.Emoji,
-    burst: Bool,
-    type_: ReactionType,
-  )
-}
-
-pub type TypingStart {
-  TypingStart(
-    channel_id: id.ChannelId,
-    guild_id: Option(id.GuildId),
-    user_id: id.UserId,
-    /// UNIX SECONDS. Not milliseconds and not ISO-8601, and the only unix
-    /// timestamp anywhere in the dispatch surface.
-    timestamp: Int,
-    /// Present on a guild channel, absent in a DM.
-    member: Option(member.GuildMember),
-  )
-}
-
-pub type MembersChunk {
-  MembersChunk(
-    guild_id: id.GuildId,
-    /// At most 1000. glyde does not reassemble the chunks: count them with
-    /// `chunk_index` and `chunk_count`.
-    members: List(member.GuildMember),
-    chunk_index: Int,
-    chunk_count: Int,
-    /// Echoes the request back, so this is whatever the caller sent, a real
-    /// snowflake or not. A String, never an `Id`.
-    not_found: List(String),
-    /// Absent when the request's nonce was over 32 bytes, which Discord drops
-    /// silently.
-    nonce: Option(String),
-  )
-}
-
-/// The answer to going over a gateway send limit, today one
-/// REQUEST_GUILD_MEMBERS per guild per 30 seconds.
-pub type RateLimited {
-  RateLimited(
-    /// The send opcode that was limited. 8 today.
-    opcode: Int,
-    /// SECONDS, fractional, and a bare `30` when the value is whole.
-    /// `retry_after_ms` is usually what you want.
-    retry_after: Float,
-    meta: RateLimitMeta,
-  )
-}
-
-/// Keyed by opcode, and open. Only opcode 8's shape is documented, and `meta`
-/// can be missing altogether.
-pub type RateLimitMeta {
-  MemberRequestMeta(guild_id: id.GuildId, nonce: Option(String))
-  /// Any other opcode, and any opcode 8 whose meta had no `guild_id`. `raw` is
-  /// the meta object as sent, or null when there was none.
-  UnknownMeta(opcode: Int, raw: Dynamic)
-}
-
-/// `retry_after` in milliseconds, never negative: "retry now" is the only
-/// reading of a negative delay a host can act on. Our floor, not Discord's.
-pub fn retry_after_ms(limited: RateLimited) -> Int {
-  let ms = limited.retry_after *. 1000.0
-  // Discord's number arms a timer. No real wait goes near 2^53, so clamp.
-  case ms >. 0.0, ms <. 9_007_199_254_740_992.0 {
-    True, True -> float.round(ms)
-    True, False -> 9_007_199_254_740_991
-    False, _ -> 0
-  }
 }
 
 pub type Dispatch {
@@ -367,314 +275,79 @@ pub fn name(event: Event) -> String {
   }
 }
 
-/// The one table. Adding an event is one line here plus one in `name`.
+/// The one table. Adding an event is one line here plus one in `name`. A
+/// family decoder returns its own record to map, or takes the constructor.
 fn decoder_for(name: String) -> Option(Decoder(Event)) {
   case name {
     "READY" -> Some(decode.map(ready.decoder(), ReadyEvent))
     // `d` is a routing breadcrumb with nothing a host can use.
     "RESUMED" -> Some(decode.success(ResumedEvent))
-    "RATE_LIMITED" -> Some(decode.map(rate_limited_decoder(), RateLimitedEvent))
+    "RATE_LIMITED" ->
+      Some(decode.map(session.rate_limited_decoder(), RateLimitedEvent))
 
-    "GUILD_CREATE" -> Some(guild_create_decoder())
+    "GUILD_CREATE" ->
+      Some(guilds.create_decoder(
+        available: GuildCreateAvailable,
+        unavailable: GuildCreateUnavailable,
+      ))
     "GUILD_UPDATE" -> Some(decode.map(guild.decoder(), GuildUpdate))
-    "GUILD_DELETE" -> Some(guild_delete_decoder())
+    "GUILD_DELETE" ->
+      Some(guilds.delete_decoder(
+        outage: GuildUnavailable,
+        removed: GuildRemoved,
+      ))
 
-    "GUILD_MEMBER_ADD" -> Some(flat_decoder(member.decoder(), GuildMemberAdd))
-    "GUILD_MEMBER_REMOVE" ->
-      Some(keyed_decoder("user", user.decoder(), GuildMemberRemove))
-    "GUILD_MEMBER_UPDATE" ->
-      Some(flat_decoder(member.decoder(), GuildMemberUpdate))
+    "GUILD_MEMBER_ADD" -> Some(guilds.member_decoder(GuildMemberAdd))
+    "GUILD_MEMBER_REMOVE" -> Some(guilds.user_decoder(GuildMemberRemove))
+    "GUILD_MEMBER_UPDATE" -> Some(guilds.member_decoder(GuildMemberUpdate))
     "GUILD_MEMBERS_CHUNK" ->
-      Some(decode.map(members_chunk_decoder(), GuildMembersChunk))
+      Some(decode.map(guilds.members_chunk_decoder(), GuildMembersChunk))
 
-    "GUILD_ROLE_CREATE" ->
-      Some(keyed_decoder("role", role.decoder(), GuildRoleCreate))
-    "GUILD_ROLE_UPDATE" ->
-      Some(keyed_decoder("role", role.decoder(), GuildRoleUpdate))
-    "GUILD_ROLE_DELETE" -> Some(role_delete_decoder())
+    "GUILD_ROLE_CREATE" -> Some(guilds.role_decoder(GuildRoleCreate))
+    "GUILD_ROLE_UPDATE" -> Some(guilds.role_decoder(GuildRoleUpdate))
+    "GUILD_ROLE_DELETE" -> Some(guilds.role_delete_decoder(GuildRoleDelete))
 
-    "GUILD_BAN_ADD" -> Some(keyed_decoder("user", user.decoder(), GuildBanAdd))
-    "GUILD_BAN_REMOVE" ->
-      Some(keyed_decoder("user", user.decoder(), GuildBanRemove))
-    "GUILD_EMOJIS_UPDATE" -> Some(emojis_update_decoder())
+    "GUILD_BAN_ADD" -> Some(guilds.user_decoder(GuildBanAdd))
+    "GUILD_BAN_REMOVE" -> Some(guilds.user_decoder(GuildBanRemove))
+    "GUILD_EMOJIS_UPDATE" ->
+      Some(guilds.emojis_update_decoder(GuildEmojisUpdate))
 
     "CHANNEL_CREATE" -> Some(decode.map(channel.decoder(), ChannelCreate))
     "CHANNEL_UPDATE" -> Some(decode.map(channel.decoder(), ChannelUpdate))
     "CHANNEL_DELETE" -> Some(decode.map(channel.decoder(), ChannelDelete))
-    "CHANNEL_PINS_UPDATE" -> Some(channel_pins_decoder())
+    "CHANNEL_PINS_UPDATE" ->
+      Some(channels.pins_update_decoder(ChannelPinsUpdate))
 
     "THREAD_CREATE" -> Some(decode.map(channel.decoder(), ThreadCreate))
     "THREAD_UPDATE" -> Some(decode.map(channel.decoder(), ThreadUpdate))
-    "THREAD_DELETE" -> Some(thread_delete_decoder())
+    "THREAD_DELETE" -> Some(channels.thread_delete_decoder(ThreadDelete))
 
     "MESSAGE_CREATE" -> Some(decode.map(message.decoder(), MessageCreate))
     "MESSAGE_UPDATE" ->
       Some(decode.map(message.update_decoder(), MessageUpdate))
-    "MESSAGE_DELETE" -> Some(message_delete_decoder())
-    "MESSAGE_DELETE_BULK" -> Some(message_delete_bulk_decoder())
+    "MESSAGE_DELETE" -> Some(messages.delete_decoder(MessageDelete))
+    "MESSAGE_DELETE_BULK" ->
+      Some(messages.delete_bulk_decoder(MessageDeleteBulk))
 
-    "MESSAGE_REACTION_ADD" -> Some(reaction_add_decoder())
-    "MESSAGE_REACTION_REMOVE" -> Some(reaction_remove_decoder())
-    "MESSAGE_REACTION_REMOVE_ALL" -> Some(reaction_remove_all_decoder())
-    "MESSAGE_REACTION_REMOVE_EMOJI" -> Some(reaction_remove_emoji_decoder())
+    "MESSAGE_REACTION_ADD" ->
+      Some(decode.map(messages.reaction_add_decoder(), MessageReactionAdd))
+    "MESSAGE_REACTION_REMOVE" ->
+      Some(decode.map(messages.reaction_remove_decoder(), MessageReactionRemove))
+    "MESSAGE_REACTION_REMOVE_ALL" ->
+      Some(messages.reaction_remove_all_decoder(MessageReactionRemoveAll))
+    "MESSAGE_REACTION_REMOVE_EMOJI" ->
+      Some(messages.reaction_remove_emoji_decoder(MessageReactionRemoveEmoji))
 
     "INTERACTION_CREATE" ->
       Some(decode.map(interaction.decoder(), InteractionCreate))
-    "TYPING_START" -> Some(decode.map(typing_start_decoder(), TypingStartEvent))
+    "TYPING_START" ->
+      Some(decode.map(presence.typing_start_decoder(), TypingStartEvent))
     "USER_UPDATE" -> Some(decode.map(user.decoder(), UserUpdate))
     "VOICE_STATE_UPDATE" ->
       Some(decode.map(voice_state.decoder(), VoiceStateUpdate))
-    "VOICE_SERVER_UPDATE" -> Some(voice_server_decoder())
+    "VOICE_SERVER_UPDATE" ->
+      Some(voice.server_update_decoder(VoiceServerUpdate))
 
     _ -> None
   }
-}
-
-/// On the VALUE of `unavailable`: `true` is a two-key stub, absent or `false`
-/// is the whole guild. GUILD_DELETE goes on the key's presence instead.
-fn guild_create_decoder() -> Decoder(Event) {
-  use maybe <- decode.then(guild.maybe_available_decoder())
-  decode.success(case maybe {
-    guild.AvailableGuild(available) -> GuildCreateAvailable(guild: available)
-    guild.OfflineGuild(offline) -> GuildCreateUnavailable(id: offline)
-  })
-}
-
-/// On the PRESENCE of `unavailable`, not its value, which `departure_decoder`
-/// reads. The two departures are different events: an outage leaves the guild
-/// in the cache, a removal takes it out.
-fn guild_delete_decoder() -> Decoder(Event) {
-  use departure <- decode.then(guild.departure_decoder())
-  decode.success(case departure {
-    guild.GuildOutage(offline) -> GuildUnavailable(id: offline)
-    guild.GuildGone(removed) -> GuildRemoved(id: removed)
-  })
-}
-
-/// For the events whose `d` is the object itself with `guild_id` bolted on.
-fn flat_decoder(
-  inner: Decoder(a),
-  build: fn(id.GuildId, a) -> Event,
-) -> Decoder(Event) {
-  use guild_id <- decode.field("guild_id", id.decoder())
-  use payload <- decode.then(inner)
-  decode.success(build(guild_id, payload))
-}
-
-/// For the events shaped `{"guild_id": …, "<key>": {…}}`.
-fn keyed_decoder(
-  key: String,
-  inner: Decoder(a),
-  build: fn(id.GuildId, a) -> Event,
-) -> Decoder(Event) {
-  use guild_id <- decode.field("guild_id", id.decoder())
-  use value <- decode.field(key, inner)
-  decode.success(build(guild_id, value))
-}
-
-fn role_delete_decoder() -> Decoder(Event) {
-  use guild_id <- decode.field("guild_id", id.decoder())
-  use role_id <- decode.field("role_id", id.decoder())
-  decode.success(GuildRoleDelete(guild_id:, role_id:))
-}
-
-/// `emojis` is required, unlike nearly every other list here: the array
-/// replaces the guild's whole set, so a missing key must not read as `[]`.
-fn emojis_update_decoder() -> Decoder(Event) {
-  use guild_id <- decode.field("guild_id", id.decoder())
-  use emojis <- decode.field("emojis", decode.list(emoji.guild_emoji_decoder()))
-  decode.success(GuildEmojisUpdate(guild_id:, emojis:))
-}
-
-fn channel_pins_decoder() -> Decoder(Event) {
-  use guild_id <- wire.opt_field("guild_id", id.decoder())
-  use channel_id <- decode.field("channel_id", id.decoder())
-  use last_pin_timestamp <- wire.opt_field("last_pin_timestamp", decode.string)
-  decode.success(ChannelPinsUpdate(guild_id:, channel_id:, last_pin_timestamp:))
-}
-
-fn thread_delete_decoder() -> Decoder(Event) {
-  use thread_id <- decode.field("id", id.decoder())
-  use guild_id <- decode.field("guild_id", id.decoder())
-  use parent_id <- wire.opt_field("parent_id", id.decoder())
-  use type_ <- decode.field("type", channel.channel_type_decoder())
-  decode.success(ThreadDelete(id: thread_id, guild_id:, parent_id:, type_:))
-}
-
-fn message_delete_decoder() -> Decoder(Event) {
-  use message_id <- decode.field("id", id.decoder())
-  use channel_id <- decode.field("channel_id", id.decoder())
-  use guild_id <- wire.opt_field("guild_id", id.decoder())
-  decode.success(MessageDelete(id: message_id, channel_id:, guild_id:))
-}
-
-fn message_delete_bulk_decoder() -> Decoder(Event) {
-  use ids <- decode.field("ids", decode.list(id.decoder()))
-  use channel_id <- decode.field("channel_id", id.decoder())
-  use guild_id <- wire.opt_field("guild_id", id.decoder())
-  decode.success(MessageDeleteBulk(ids:, channel_id:, guild_id:))
-}
-
-fn reaction_add_decoder() -> Decoder(Event) {
-  use user_id <- decode.field("user_id", id.decoder())
-  use channel_id <- decode.field("channel_id", id.decoder())
-  use message_id <- decode.field("message_id", id.decoder())
-  use guild_id <- wire.opt_field("guild_id", id.decoder())
-  use reactor <- wire.opt_field("member", member.decoder())
-  use reaction <- decode.field("emoji", emoji.decoder())
-  use message_author_id <- wire.opt_field("message_author_id", id.decoder())
-  use burst <- wire.flag_field("burst", False)
-  use burst_colors <- wire.list_field("burst_colors", decode.string)
-  use type_ <- reaction_type_field()
-  decode.success(
-    MessageReactionAdd(ReactionAdd(
-      user_id:,
-      channel_id:,
-      message_id:,
-      guild_id:,
-      member: reactor,
-      emoji: reaction,
-      message_author_id:,
-      burst:,
-      burst_colors:,
-      type_:,
-    )),
-  )
-}
-
-/// No `member`, no `message_author_id`, no `burst_colors`. Copying the add
-/// decoder keeps them, and `decode.field` on an absent key drops the event.
-fn reaction_remove_decoder() -> Decoder(Event) {
-  use user_id <- decode.field("user_id", id.decoder())
-  use channel_id <- decode.field("channel_id", id.decoder())
-  use message_id <- decode.field("message_id", id.decoder())
-  use guild_id <- wire.opt_field("guild_id", id.decoder())
-  use reaction <- decode.field("emoji", emoji.decoder())
-  use burst <- wire.flag_field("burst", False)
-  use type_ <- reaction_type_field()
-  decode.success(
-    MessageReactionRemove(ReactionRemove(
-      user_id:,
-      channel_id:,
-      message_id:,
-      guild_id:,
-      emoji: reaction,
-      burst:,
-      type_:,
-    )),
-  )
-}
-
-fn reaction_remove_all_decoder() -> Decoder(Event) {
-  use channel_id <- decode.field("channel_id", id.decoder())
-  use message_id <- decode.field("message_id", id.decoder())
-  use guild_id <- wire.opt_field("guild_id", id.decoder())
-  decode.success(MessageReactionRemoveAll(channel_id:, message_id:, guild_id:))
-}
-
-fn reaction_remove_emoji_decoder() -> Decoder(Event) {
-  use channel_id <- decode.field("channel_id", id.decoder())
-  use message_id <- decode.field("message_id", id.decoder())
-  use guild_id <- wire.opt_field("guild_id", id.decoder())
-  use reaction <- decode.field("emoji", emoji.decoder())
-  decode.success(MessageReactionRemoveEmoji(
-    channel_id:,
-    message_id:,
-    guild_id:,
-    emoji: reaction,
-  ))
-}
-
-fn typing_start_decoder() -> Decoder(TypingStart) {
-  use channel_id <- decode.field("channel_id", id.decoder())
-  use guild_id <- wire.opt_field("guild_id", id.decoder())
-  use user_id <- decode.field("user_id", id.decoder())
-  use timestamp <- decode.field("timestamp", wire.integer())
-  use typist <- wire.opt_field("member", member.decoder())
-  decode.success(TypingStart(
-    channel_id:,
-    guild_id:,
-    user_id:,
-    timestamp:,
-    member: typist,
-  ))
-}
-
-fn members_chunk_decoder() -> Decoder(MembersChunk) {
-  use guild_id <- decode.field("guild_id", id.decoder())
-  // Required, unlike `not_found`: a chunk with no `members` key is malformed,
-  // and reading it as empty loses members with no sign anything went wrong.
-  use members <- decode.field("members", decode.list(member.decoder()))
-  use chunk_index <- decode.field("chunk_index", wire.integer())
-  use chunk_count <- decode.field("chunk_count", wire.integer())
-  use not_found <- wire.list_field("not_found", snowflake_or_number())
-  use nonce <- wire.opt_field("nonce", decode.string)
-  decode.success(MembersChunk(
-    guild_id:,
-    members:,
-    chunk_index:,
-    chunk_count:,
-    not_found:,
-    nonce:,
-  ))
-}
-
-fn rate_limited_decoder() -> Decoder(RateLimited) {
-  use opcode <- decode.field("opcode", wire.integer())
-  use retry_after <- decode.field("retry_after", wire.number())
-  use meta <- decode.optional_field("meta", dynamic.nil(), decode.dynamic)
-  decode.success(RateLimited(
-    opcode:,
-    retry_after:,
-    meta: rate_limit_meta(opcode, meta),
-  ))
-}
-
-/// Opcode 8 is the only meta shape Discord documents. Anything else, a
-/// missing meta included, keeps the raw object rather than guessing.
-fn rate_limit_meta(opcode: Int, raw: Dynamic) -> RateLimitMeta {
-  case opcode, decode.run(raw, member_request_meta_decoder()) {
-    8, Ok(meta) -> meta
-    _, _ -> UnknownMeta(opcode:, raw:)
-  }
-}
-
-fn member_request_meta_decoder() -> Decoder(RateLimitMeta) {
-  use guild_id <- decode.field("guild_id", id.decoder())
-  use nonce <- wire.opt_field("nonce", decode.string)
-  decode.success(MemberRequestMeta(guild_id:, nonce:))
-}
-
-fn voice_server_decoder() -> Decoder(Event) {
-  use token <- decode.field("token", decode.string)
-  use guild_id <- decode.field("guild_id", id.decoder())
-  // Required and nullable: the null says the voice server went away, so an
-  // absent key must fail rather than forge that.
-  use endpoint <- wire.nullable_field("endpoint", decode.string)
-  decode.success(VoiceServerUpdate(token:, guild_id:, endpoint:))
-}
-
-/// The reaction `type`, which an older payload omits. Only absence defaults:
-/// a `type` that is present and unreadable is a burst reaction we would
-/// otherwise hand to a host as a normal one.
-fn reaction_type_field(
-  next: fn(ReactionType) -> Decoder(final),
-) -> Decoder(final) {
-  decode.optional_field(
-    "type",
-    message.NormalReaction,
-    message.reaction_type_decoder(),
-    next,
-  )
-}
-
-/// A snowflake that can come back as a JSON number, because that is what the
-/// caller sent. Only `GUILD_MEMBERS_CHUNK.not_found` does this.
-///
-/// `decode.int` and not `wire.integer()`: every snowflake is 17 to 19 digits,
-/// which is past that helper's 2^53 ceiling. A bare number is already rounded
-/// by any JSON parser working in doubles, which is why glyde sends snowflakes
-/// as strings.
-fn snowflake_or_number() -> Decoder(String) {
-  decode.one_of(decode.string, or: [decode.map(decode.int, int.to_string)])
 }
