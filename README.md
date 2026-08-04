@@ -89,10 +89,6 @@ pub fn hello_queues_for_an_identify_slot_test() {
 }
 ```
 
-One step at a time cannot catch an ordering bug, so `glyde/testing` runs every
-ordering of a set of inputs against an invariant you write once. It is public
-and drives any machine of that shape, including yours.
-
 ## A REST call is a value
 
 `rest.request(config, call)` hands you a `gleam_http` request. Send it with

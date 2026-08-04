@@ -24,3 +24,9 @@ pub fn is_absent_test() {
   assert !field.is_absent(field.Null)
   assert !field.is_absent(field.Present(1))
 }
+
+/// The mirror of `from_option`: `None` means clear it, not leave it.
+pub fn or_null_never_produces_absent_test() {
+  assert field.or_null(Some(7)) == field.Present(7)
+  assert field.or_null(None) == field.Null
+}

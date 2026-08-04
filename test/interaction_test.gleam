@@ -1,6 +1,8 @@
 import gleam/bit_array
 import gleam/dict
 import gleam/dynamic/decode
+import gleam/http
+import gleam/http/request.{type Request}
 import gleam/int
 import gleam/json
 import gleam/list
@@ -1367,4 +1369,98 @@ fn payload_json(wire: body.Wire) -> String {
   let assert Ok(#(_, after_headers)) = string.split_once(rendered, "\r\n\r\n")
   let assert Ok(#(document, _)) = string.split_once(after_headers, "\r\n--")
   document
+}
+
+// -- Shortcuts ---------------------------------------------------------------
+//
+// Each helper is the plumbing above with the two arguments picked, so the
+// tests here read the request straight off the built `Call` and check the
+// method, path and body Discord would see.
+
+/// A slash command as it arrives on the gateway. The five keys a PING carries
+/// plus `type: 2`, so the token and both ids are known values.
+fn command() -> interaction.Interaction {
+  let assert Ok(it) =
+    parse(
+      "{\"id\":\"846092147101974528\",\"application_id\":\"1234567890123456789\","
+      <> "\"type\":2,\"token\":\"aW50ZXJhY3Rpb24udG9rZW4\",\"version\":1,"
+      <> "\"data\":{\"id\":\"9\",\"name\":\"hello\",\"type\":1}}",
+    )
+  it
+}
+
+fn built(call: rest.Call(a)) -> Request(body.Wire) {
+  rest.request(rest.config(rest.unauthenticated()), call)
+}
+
+const callback_path: String = "/api/v10/interactions/846092147101974528/aW50ZXJhY3Rpb24udG9rZW4/callback"
+
+const original_path: String = "/api/v10/webhooks/1234567890123456789/aW50ZXJhY3Rpb24udG9rZW4/messages/@original"
+
+const followup_path: String = "/api/v10/webhooks/1234567890123456789/aW50ZXJhY3Rpb24udG9rZW4"
+
+pub fn respond_posts_a_type_4_callback_test() {
+  let sent = built(interaction.respond(command(), message.text("hello")))
+
+  assert sent.method == http.Post
+  assert sent.path == callback_path
+  assert sent.query == None
+  assert sent.body == body.Text("{\"type\":4,\"data\":{\"content\":\"hello\"}}")
+}
+
+pub fn defer_posts_a_bare_type_5_callback_test() {
+  let sent = built(interaction.defer(command()))
+
+  assert sent.method == http.Post
+  assert sent.path == callback_path
+  assert sent.body == body.Text("{\"type\":5}")
+}
+
+pub fn defer_ephemeral_sets_only_the_ephemeral_flag_test() {
+  let sent = built(interaction.defer_ephemeral(command()))
+
+  assert sent.method == http.Post
+  assert sent.path == callback_path
+  assert sent.body == body.Text("{\"type\":5,\"data\":{\"flags\":64}}")
+}
+
+pub fn edit_response_patches_the_original_message_test() {
+  let edit =
+    message.Edit(..message.new_edit(mentions.none()), content: Present("done"))
+  let sent = built(interaction.edit_response(command(), edit))
+
+  assert sent.method == http.Patch
+  assert sent.path == original_path
+  assert sent.body
+    == body.Text(
+      "{\"content\":\"done\",\"allowed_mentions\":{\"parse\":[],\"replied_user\":false}}",
+    )
+}
+
+pub fn followup_posts_to_the_webhook_and_waits_test() {
+  let sent = built(interaction.followup(command(), message.text("more")))
+
+  assert sent.method == http.Post
+  assert sent.path == followup_path
+  assert sent.query == Some("wait=true")
+  assert sent.body == body.Text("{\"content\":\"more\"}")
+}
+
+/// The three keys a callback cannot carry are dropped, and the ones it can
+/// are copied unchanged.
+pub fn from_draft_drops_the_channel_only_keys_test() {
+  let draft =
+    message.text("hi")
+    |> message.tts
+    |> message.reply_to(id.from_string("111"))
+    |> message.sticker(id.from_string("222"))
+    |> message.with_nonce(message.StringNonce("abc"))
+    |> message.allowed_mentions(mentions.none())
+
+  assert interaction.from_draft(draft)
+    == MessageCallbackData(
+      ..interaction.text("hi"),
+      tts: True,
+      allowed_mentions: Some(mentions.none()),
+    )
 }

@@ -40,7 +40,6 @@ import glyde/gateway/command.{type Command}
 import glyde/gateway/frame
 import glyde/gateway/presence
 import glyde/intents
-import glyde/testing
 import glyde/testing/frames
 import glyde/token
 import glyde/websocket/sendcode
@@ -48,6 +47,10 @@ import glyde/websocket/sendcode
 /// The seed every scenario runs with. The expected `Armed` values below are
 /// jittered from it, so an adapter does not get to choose.
 pub const seed: Int = 7
+
+/// Timers one `Waits` beat fires before it gives up. Our choice: far above any
+/// real chain of deadlines, far below a hang.
+const max_firings: Int = 1000
 
 /// The config every scenario runs against. Defaults throughout, so a delay in
 /// an expectation traces back to `gateway.config`.
@@ -567,8 +570,8 @@ pub type Verdict {
   /// The traces agree up to `at` and disagree there. `wanted` and `got` are
   /// `None` when one trace ran out.
   Diverged(at: Int, wanted: Option(Act), got: Option(Act), trace: List(Act))
-  /// A wait fired `testing.max_firings` timers and time had not reached the end
-  /// of the beat. The run stopped there, so the trace is the one the spin left.
+  /// A wait fired `max_firings` timers and time had not reached the end of the
+  /// beat. The run stopped there, so the trace is the one the spin left.
   Stalled(trace: List(Act))
   /// Beat `at` asked for something the world could not do: a socket that was
   /// never opened, or a close nobody was waiting on. The trace was still the
@@ -764,9 +767,8 @@ fn play(
           Ok(deliver(adapter, trial, gateway.Closed(conn, Some(code))))
       }
 
-    // One budget for a scripted clock, shared with `testing.advance`.
     Waits(ms:) ->
-      wait(adapter, trial, trial.now_ms + int.max(0, ms), testing.max_firings)
+      wait(adapter, trial, trial.now_ms + int.max(0, ms), max_firings)
 
     // Stamps only go up, so one below every stamp ever issued is a firing from
     // an arming that no longer exists.

@@ -19,14 +19,17 @@ jobs:
       - run: gleam deps download
       - run: gleam test
 
-  # The example is the only consumer of glyde's public API from outside the
-  # package, so compiling it catches a breaking change the library's own tests
-  # cannot see.
+  # The examples are the only consumers of glyde's public API from outside the
+  # package, so compiling them catches a breaking change the library's own
+  # tests cannot see.
   example:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        example: [ping_pong, slash_command]
     defaults:
       run:
-        working-directory: examples/ping_pong
+        working-directory: examples/${{ matrix.example }}
     steps:
       - uses: actions/checkout@v6
       - uses: erlef/setup-beam@v1

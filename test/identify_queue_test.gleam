@@ -5,7 +5,6 @@ import glyde/identify_queue.{
   type Input, type Output, type Queue, BudgetLow, Deny, Grant, Note, Release,
   Request, Tick, Waiting, Wake,
 }
-import glyde/testing.{type Run}
 
 /// One line of a scenario: the clock, one input, and every output allowed.
 type Step {
@@ -397,71 +396,39 @@ pub fn hostile_limits_are_clamped_test() {
   ])
 }
 
-fn machine() -> testing.Machine(Queue, Input, Output) {
-  fn(queue, input) { identify_queue.step(queue, now_ms: 0, input:) }
-}
-
-/// Everything but a grant or a denial is a hint, including `Wake`: acting on
-/// it early, late or never costs latency and nothing else.
-fn is_note(output: Output) -> Bool {
-  case output {
-    Note(_) | Wake(_) -> True
-    Grant(_) | Deny(_, _) -> False
-  }
-}
-
-fn granted_keys(run: Run(Queue, Output)) -> List(Int) {
-  testing.without_notes(is_note, run.outputs)
-  |> list.filter_map(fn(output) {
-    case output {
-      Grant(shard:) -> Ok(shard % 2)
-      _ -> Error(Nil)
-    }
+fn granted_keys(queue: Queue, ordering: List(Input)) -> #(Queue, List(Int)) {
+  list.fold(ordering, #(queue, []), fn(acc, input) {
+    let #(queue, keys) = acc
+    let #(queue, out) = identify_queue.step(queue, now_ms: 0, input:)
+    let granted =
+      list.filter_map(out, fn(one) {
+        case one {
+          Grant(shard:) -> Ok(shard % 2)
+          _ -> Error(Nil)
+        }
+      })
+    #(queue, list.append(keys, granted))
   })
 }
 
-/// All 120 orders of five inputs at one instant. No order may talk a bucket
-/// into a second grant, and a release may land before its own request.
-pub fn no_arrival_order_buys_a_second_slot_test() {
-  let inputs = [
-    Request(shard: 0),
-    Request(shard: 2),
-    Request(shard: 1),
-    Release(shard: 0),
-    Tick,
-  ]
-
-  let verdict =
-    testing.every_ordering(machine(), fleet(2), inputs, fn(run) {
-      let keys = granted_keys(run)
-      let once = list.length(keys) == list.length(list.unique(keys))
-      let paid = identify_queue.remaining(run.state) == 1000 - list.length(keys)
-      once && paid
-    })
-
-  assert verdict == Ok(testing.Held)
-}
-
-/// Which shard wins a bucket depends on who asked first, and should. Which
-/// buckets get served, and how much budget that costs, must not.
+/// All 120 orders of five inputs at one instant. Which shard wins a bucket
+/// depends on who asked first, and should. Which buckets get served, and how
+/// much budget that costs, must not: no order may talk a bucket into a second
+/// grant, and a release may land before its own request.
 pub fn every_arrival_order_serves_the_same_buckets_test() {
-  let inputs = [
+  [
     Request(shard: 0),
     Request(shard: 2),
     Request(shard: 1),
     Release(shard: 0),
     Tick,
   ]
-
-  let assert Ok(groups) =
-    testing.outcomes(machine(), fleet(2), inputs, fn(run) {
-      #(
-        list.sort(granted_keys(run), int.compare),
-        identify_queue.remaining(run.state),
-      )
-    })
-
-  assert groups == [testing.Outcome(#([0, 1], 998), testing.orderings(inputs))]
+  |> list.permutations
+  |> list.each(fn(ordering) {
+    let #(queue, keys) = granted_keys(fleet(2), ordering)
+    assert list.sort(keys, int.compare) == [0, 1]
+    assert identify_queue.remaining(queue) == 998
+  })
 }
 
 /// A fake host with a virtual clock, answering grants the way a real shard

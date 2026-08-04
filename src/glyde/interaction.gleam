@@ -1066,6 +1066,22 @@ pub fn update_data(mentions: AllowedMentions) -> message.Edit {
   message.new_edit(mentions)
 }
 
+/// A `Draft` as callback data, so `message.text` and its setters build an
+/// interaction reply as well as a channel post. `sticker_ids`, `reference` and
+/// `nonce` are dropped: an interaction response is not a channel create, and
+/// Discord takes none of them here.
+pub fn from_draft(draft: message.Draft) -> MessageCallbackData {
+  MessageCallbackData(
+    content: draft.content,
+    tts: draft.tts,
+    embeds: draft.embeds,
+    components: draft.components,
+    files: draft.files,
+    allowed_mentions: draft.allowed_mentions,
+    flags: draft.flags,
+  )
+}
+
 pub fn response_to_json(response: InteractionResponse) -> Json {
   json.object(response_fields(response))
 }
@@ -1298,6 +1314,61 @@ pub fn delete_followup(
   message: id.MessageId,
 ) -> Call(Nil) {
   webhook.delete_message(as_webhook(responder), message, thread: None)
+}
+
+// -- Shortcuts ---------------------------------------------------------------
+//
+// The `Interaction` off the gateway straight to a `Call`, so a handler writes
+// `interaction.respond(it, message.text("hi"))` rather than assembling a
+// `Responder` and a callback body itself. Each is the plumbing above with the
+// two arguments picked.
+
+/// Reply with a message. Callback type 4. The first response owed within
+/// three seconds; past that Discord drops the interaction and this call
+/// answers 404. `defer` first if the reply takes longer to build.
+pub fn respond(interaction: Interaction, draft: message.Draft) -> Call(Nil) {
+  callback(
+    responding_to(interaction),
+    ChannelMessageWithSource(from_draft(draft)),
+  )
+}
+
+/// Show "thinking..." and buy fifteen minutes. Callback type 5. Send within
+/// three seconds, then finish with `edit_response`. The reply is public: the
+/// eventual edit cannot make it ephemeral, so pick `defer_ephemeral` now if
+/// only the invoker should see it.
+pub fn defer(interaction: Interaction) -> Call(Nil) {
+  callback(
+    responding_to(interaction),
+    DeferredChannelMessageWithSource(ephemeral: False),
+  )
+}
+
+/// `defer` with the reply visible only to the invoker. Fixed at defer time:
+/// the eventual `edit_response` cannot change it back to public.
+pub fn defer_ephemeral(interaction: Interaction) -> Call(Nil) {
+  callback(
+    responding_to(interaction),
+    DeferredChannelMessageWithSource(ephemeral: True),
+  )
+}
+
+/// Turn a deferred response into a real one, or edit one already sent.
+/// `PATCH /webhooks/{application.id}/{token}/messages/@original`.
+pub fn edit_response(
+  interaction: Interaction,
+  edit: message.Edit,
+) -> Call(message.Message) {
+  edit_original_response(responding_to(interaction), message.edit_body(edit))
+}
+
+/// A second message on the same interaction, after `respond` or `defer` has
+/// answered it. `POST /webhooks/{application.id}/{token}?wait=true`.
+pub fn followup(
+  interaction: Interaction,
+  draft: message.Draft,
+) -> Call(message.Message) {
+  create_followup(responding_to(interaction), message.to_body(draft))
 }
 
 /// This route is `route.Unbound`: it sits in no bucket, so the token cannot
