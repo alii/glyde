@@ -11,6 +11,7 @@ import gleam/list
 import gleam/option.{type Option}
 import gleam/result
 import glyde/id.{type Id}
+import glyde/internal/decode_error
 import glyde/internal/url
 import glyde/wire
 
@@ -32,20 +33,21 @@ pub type ReadyPayload {
 pub type ReadyRejected {
   /// One of `session_id`, `resume_gateway_url` and `user.id` is missing or the
   /// wrong type.
-  MissingReadyFields
+  MissingReadyFields(errors: List(decode.DecodeError))
 }
 
 pub fn describe_rejected(why: ReadyRejected) -> String {
   case why {
-    MissingReadyFields ->
-      "ready needs session_id, resume_gateway_url and user.id"
+    MissingReadyFields(errors:) ->
+      "ready needs session_id, resume_gateway_url and user.id: "
+      <> decode_error.describe(errors)
   }
 }
 
 /// The parts of READY the protocol needs.
 pub fn read(data: Dynamic) -> Result(ReadyPayload, ReadyRejected) {
   decode.run(data, decoder())
-  |> result.replace_error(MissingReadyFields)
+  |> result.map_error(MissingReadyFields)
 }
 
 fn decoder() -> Decoder(ReadyPayload) {

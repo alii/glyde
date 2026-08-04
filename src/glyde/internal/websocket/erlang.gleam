@@ -309,10 +309,10 @@ type Target {
 }
 
 fn target_of(url: String) -> Result(Target, Error) {
-  use parsed <- result.try(
-    uri.parse(url)
-    |> result.replace_error(BadUrl(url:, problem: NotParseable)),
-  )
+  use parsed <- result.try(case uri.parse(url) {
+    Ok(parsed) -> Ok(parsed)
+    Error(Nil) -> Error(BadUrl(url:, problem: NotParseable))
+  })
 
   use <- bool.guard(
     parsed.scheme != option.Some("wss"),

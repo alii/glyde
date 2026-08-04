@@ -151,34 +151,19 @@ pub fn a_resume_url_with_no_host_still_reads_test() {
 /// reason is a value rather than a sentence.
 pub fn ready_failures_test() {
   let table = [
-    #("{}", ready.MissingReadyFields),
-    #(
-      "{\"resume_gateway_url\":\"wss://h.discord.gg\",\"user\":{\"id\":\"7\"}}",
-      ready.MissingReadyFields,
-    ),
-    #(
-      "{\"session_id\":\"abc\",\"user\":{\"id\":\"7\"}}",
-      ready.MissingReadyFields,
-    ),
-    #(
-      "{\"session_id\":\"abc\",\"resume_gateway_url\":\"wss://h.discord.gg\"}",
-      ready.MissingReadyFields,
-    ),
-    #(
-      "{\"session_id\":\"abc\",\"resume_gateway_url\":\"wss://h.discord.gg\","
-        <> "\"user\":{}}",
-      ready.MissingReadyFields,
-    ),
+    "{}",
+    "{\"resume_gateway_url\":\"wss://h.discord.gg\",\"user\":{\"id\":\"7\"}}",
+    "{\"session_id\":\"abc\",\"user\":{\"id\":\"7\"}}",
+    "{\"session_id\":\"abc\",\"resume_gateway_url\":\"wss://h.discord.gg\"}",
+    "{\"session_id\":\"abc\",\"resume_gateway_url\":\"wss://h.discord.gg\","
+      <> "\"user\":{}}",
     // A snowflake is a String on the wire, and a JSON number is not one.
-    #(
-      "{\"session_id\":\"abc\",\"resume_gateway_url\":\"wss://h.discord.gg\","
-        <> "\"user\":{\"id\":1529362398568517793}}",
-      ready.MissingReadyFields,
-    ),
+    "{\"session_id\":\"abc\",\"resume_gateway_url\":\"wss://h.discord.gg\","
+      <> "\"user\":{\"id\":1529362398568517793}}",
   ]
-  list.each(table, fn(row) {
-    let #(body, expected) = row
-    assert ready_of(body) == Error(expected)
+  list.each(table, fn(body) {
+    let assert Error(ready.MissingReadyFields(errors)) = ready_of(body)
+    assert errors != []
   })
 }
 

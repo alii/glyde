@@ -254,14 +254,11 @@ pub fn response(
   // Discord answers in UTF-8 everywhere, so a body that is not text came from
   // something in between. Reading it as an empty one would report a proxy's
   // binary page as a JSON decode failure.
-  use text <- result.try(
-    bit_array.to_string(body)
-    |> result.replace_error(error.not_text(
-      status:,
-      headers:,
-      bytes: bit_array.byte_size(body),
-    )),
-  )
+  use text <- result.try(case bit_array.to_string(body) {
+    Ok(text) -> Ok(text)
+    Error(Nil) ->
+      Error(error.not_text(status:, headers:, bytes: bit_array.byte_size(body)))
+  })
   use <- bool.lazy_guard(status < 200 || status >= 300, fn() {
     Error(error.from_response(status:, headers:, body: text))
   })

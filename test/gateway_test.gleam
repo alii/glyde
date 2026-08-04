@@ -446,12 +446,14 @@ pub fn an_unreadable_ready_reconnects_and_reidentifies_test() {
   assert after.phase == Waiting(Identify)
   assert gateway.session(after) == None
   assert whys(outputs) == [gateway.HandshakeUnreadable]
-  assert list.contains(
-    outputs,
-    Note(
-      gateway.UndecodableFrame(gateway.ReadyIncomplete(ready.MissingReadyFields)),
-    ),
-  )
+  assert list.any(outputs, fn(output) {
+    case output {
+      Note(gateway.UndecodableFrame(gateway.ReadyIncomplete(ready.MissingReadyFields(
+        _,
+      )))) -> True
+      _ -> False
+    }
+  })
 }
 
 /// Connected means READY or RESUMED, never READY alone. A process that booted
