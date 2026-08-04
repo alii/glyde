@@ -11,23 +11,23 @@
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode.{type Decoder}
 import gleam/option.{type Option, None, Some}
+import glyde/channel
+import glyde/emoji
 import glyde/event/channels
 import glyde/event/guilds
 import glyde/event/messages
 import glyde/event/presence
 import glyde/event/session
 import glyde/event/voice
+import glyde/guild
 import glyde/id
-import glyde/model/channel
-import glyde/model/emoji
-import glyde/model/guild
-import glyde/model/interaction
-import glyde/model/member
-import glyde/model/message
-import glyde/model/ready
-import glyde/model/role
-import glyde/model/user
-import glyde/model/voice_state
+import glyde/interaction
+import glyde/member
+import glyde/message
+import glyde/ready
+import glyde/role
+import glyde/user
+import glyde/voice_state
 
 /// One decoded dispatch.
 pub type Event {

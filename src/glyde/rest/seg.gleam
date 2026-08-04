@@ -224,7 +224,7 @@ fn classify(segments: List(String)) -> List(Seg) {
     // The exception to the pair rules: Discord buckets every `/users` route
     // together, so nothing inside one is a major parameter. Not the user id,
     // and not the guild in `/users/@me/guilds/{id}`, which addresses the bot's
-    // own membership rather than the guild. `glyde/api/user` says the same.
+    // own membership rather than the guild. `glyde/guild` says the same.
     ["users", ..rest] -> [Literal("users"), ..list.map(rest, loose)]
 
     ["webhooks", value, token, ..rest] ->

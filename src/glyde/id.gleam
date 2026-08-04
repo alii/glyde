@@ -38,7 +38,7 @@ pub type Interaction
 pub type Message
 
 /// A permission overwrite, which is addressed by the id of the role or member
-/// it applies to. `model/channel.OverwriteTarget` says which of the two.
+/// it applies to. `glyde/channel.OverwriteTarget` says which of the two.
 pub type Overwrite
 
 pub type Role

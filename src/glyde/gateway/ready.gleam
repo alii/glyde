@@ -1,7 +1,7 @@
 //// READY as the protocol reads it: the session, the host to resume on, and
 //// who we logged in as.
 ////
-//// `glyde/model/ready` is the host's view of the same dispatch. This is a
+//// `glyde/ready` is the host's view of the same dispatch. This is a
 //// separate, tiny decode on purpose, so a bug in that one's tens of kilobytes
 //// cannot cost a session.
 
@@ -23,7 +23,7 @@ pub type ReadyPayload {
     resume_host: Option(url.Host),
     user: Id(id.User),
     /// How many guilds READY listed, not the guilds themselves:
-    /// `glyde/model/ready` is the one that decodes them.
+    /// `glyde/ready` is the one that decodes them.
     guild_count: Int,
   )
 }

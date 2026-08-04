@@ -1,5 +1,5 @@
 //// VOICE_* dispatches. VOICE_STATE_UPDATE decodes straight to
-//// `model/voice_state`.
+//// `glyde/voice_state`.
 
 import gleam/dynamic/decode.{type Decoder}
 import gleam/option.{type Option}

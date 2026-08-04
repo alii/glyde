@@ -3,12 +3,12 @@
 
 import gleam/dynamic/decode.{type Decoder}
 import gleam/option.{type Option}
+import glyde/emoji
+import glyde/guild
 import glyde/id
-import glyde/model/emoji
-import glyde/model/guild
-import glyde/model/member
-import glyde/model/role
-import glyde/model/user
+import glyde/member
+import glyde/role
+import glyde/user
 import glyde/wire
 
 pub type MembersChunk {

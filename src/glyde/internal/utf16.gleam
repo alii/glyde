@@ -3,7 +3,7 @@
 //// `string.length`, twenty-five bytes on the wire, and eleven of Discord's
 //// characters.
 ////
-//// Only `payload/embed.character_count` reads this. Nothing here enforces a
+//// Only `embed.character_count` reads this. Nothing here enforces a
 //// limit: an over-long field is Discord's 50035 to raise, not glyde's.
 
 import gleam/list

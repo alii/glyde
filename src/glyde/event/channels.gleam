@@ -1,10 +1,10 @@
 //// CHANNEL_* and THREAD_* dispatches. Create, update and delete decode
-//// straight to `model/channel`; these are the two that are not a channel.
+//// straight to `glyde/channel`; these are the two that are not a channel.
 
 import gleam/dynamic/decode.{type Decoder}
 import gleam/option.{type Option}
+import glyde/channel
 import glyde/id
-import glyde/model/channel
 import glyde/wire
 
 /// CHANNEL_PINS_UPDATE, as guild id, channel id, last pin timestamp.

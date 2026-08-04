@@ -3,7 +3,7 @@
 ////
 //// Both directions need all three. Encoding a PATCH, `parent_id: null` clears
 //// a channel's category and omitting the key leaves the category alone.
-//// Decoding, `wire.tri_field` builds one and `model/message` keeps it, so
+//// Decoding, `wire.tri_field` builds one and `glyde/message` keeps it, so
 //// "Discord never resolved this" stays apart from "it was deleted".
 ////
 //// `Present`, not `Set`, so an unqualified import does not shadow `gleam/set`.

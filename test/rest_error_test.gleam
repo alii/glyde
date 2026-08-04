@@ -227,7 +227,7 @@ fn token_fatal_table() -> List(#(Int, Int, Bool)) {
     #(403, 50_013, False),
     #(400, 50_035, False),
     #(404, 10_008, False),
-    // The credential in the path, not the client's. `glyde/api/webhook` sends
+    // The credential in the path, not the client's. `glyde/webhook` sends
     // no `Authorization` header at all, so a bot that stopped here would be
     // stopping over somebody else's dead token.
     #(401, 50_027, False),

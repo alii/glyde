@@ -3,11 +3,11 @@ import gleam/dynamic/decode
 import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
+import glyde/emoji
 import glyde/event
 import glyde/event/messages
 import glyde/id
-import glyde/model/emoji
-import glyde/model/message
+import glyde/message
 
 fn payload(text: String) -> Dynamic {
   let assert Ok(value) = json.parse(text, decode.dynamic)

@@ -12,12 +12,11 @@ Here's an example bot that answers `!ping` and counts how many it has sent:
 
 ```gleam
 import envoy
-import gleam/bool
 import gleam/int
 import gleam/io
 import glyde
-import glyde/draft
 import glyde/intents
+import glyde/message
 
 pub fn main() -> Nil {
   use token <- glyde.require_token(envoy.get("DISCORD_TOKEN"))
@@ -35,10 +34,10 @@ pub fn main() -> Nil {
     io.println("logged in as " <> ready.me.user.username)
     glyde.continue(pongs)
   })
-  |> glyde.on_message(fn(pongs, message) {
-    use <- bool.guard(message.content != "!ping", glyde.continue(pongs))
-    let pong = draft.text("pong! #" <> int.to_string(pongs + 1))
-    use _ <- glyde.reply(message, pong)
+  |> glyde.on_message(fn(pongs, msg) {
+    use <- glyde.when(msg.content == "!ping", or: pongs)
+    let pong = message.text("pong! #" <> int.to_string(pongs + 1))
+    use _ <- glyde.try(message.reply(msg, pong), or: pongs)
     glyde.continue(pongs + 1)
   })
   |> glyde.run
@@ -118,8 +117,9 @@ a state machine too: it says when to send and what a 429 means, it does not
 sleep and it does not retry behind your back.
 
 84 endpoints, covering channels and messages, guilds, members, roles, threads,
-application commands, interactions, webhooks and users. A message body comes
-from `glyde/draft`, the rest from `glyde/payload`, and `draft.to_body` writes
+application commands, interactions, webhooks and users. Each noun is one
+module: `glyde/message` holds the received type, the `Draft` and `Edit`
+builders, and every endpoint that acts on a message. `message.to_body` writes
 the `attachments` cross-reference for any file on the draft, which a
 hand-written JSON object silently does not. Ids are tagged by what they
 identify, so the two snowflakes in `/channels/{channel_id}/messages/{message_id}`

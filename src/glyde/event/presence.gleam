@@ -1,10 +1,10 @@
 //// Who is doing what: TYPING_START today. USER_UPDATE decodes straight to
-//// `model/user`, and PRESENCE_UPDATE is not modelled yet.
+//// `glyde/user`, and PRESENCE_UPDATE is not modelled yet.
 
 import gleam/dynamic/decode.{type Decoder}
 import gleam/option.{type Option}
 import glyde/id
-import glyde/model/member
+import glyde/member
 import glyde/wire
 
 pub type TypingStart {

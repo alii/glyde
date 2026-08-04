@@ -1,4 +1,4 @@
-//// The session's own dispatches. READY decodes in `model/ready` and RESUMED
+//// The session's own dispatches. READY decodes in `glyde/ready` and RESUMED
 //// carries nothing, which leaves RATE_LIMITED.
 
 import gleam/dynamic.{type Dynamic}

@@ -1,12 +1,12 @@
 //// MESSAGE_* dispatches: deletes and reactions. Create and update decode
-//// straight to `model/message`.
+//// straight to `glyde/message`.
 
 import gleam/dynamic/decode.{type Decoder}
 import gleam/option.{type Option}
+import glyde/emoji
 import glyde/id
-import glyde/model/emoji
-import glyde/model/member
-import glyde/model/message.{type ReactionType}
+import glyde/member
+import glyde/message.{type ReactionType}
 import glyde/wire
 
 /// Not a mirror of `ReactionRemove`: the add carries `member`,

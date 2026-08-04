@@ -5,7 +5,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import glyde/event
 import glyde/id
-import glyde/model/voice_state
+import glyde/voice_state
 
 fn payload(text: String) -> Dynamic {
   let assert Ok(value) = json.parse(text, decode.dynamic)

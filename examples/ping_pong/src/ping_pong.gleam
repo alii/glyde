@@ -1,12 +1,11 @@
 //// A Discord bot that answers "!ping" with "pong!", counting as it goes.
 
 import envoy
-import gleam/bool
 import gleam/int
 import gleam/io
 import glyde
-import glyde/draft
 import glyde/intents
+import glyde/message
 
 pub fn main() -> Nil {
   use token <- glyde.require_token(envoy.get("DISCORD_TOKEN"))
@@ -24,10 +23,10 @@ pub fn main() -> Nil {
     io.println("logged in as " <> ready.me.user.username)
     glyde.continue(pongs)
   })
-  |> glyde.on_message(fn(pongs, message) {
-    use <- bool.guard(message.content != "!ping", glyde.continue(pongs))
-    let pong = draft.text("pong! #" <> int.to_string(pongs + 1))
-    use _ <- glyde.reply(message, pong)
+  |> glyde.on_message(fn(pongs, msg) {
+    use <- glyde.when(msg.content == "!ping", or: pongs)
+    let pong = message.text("pong! #" <> int.to_string(pongs + 1))
+    use _ <- glyde.try(message.reply(msg, pong), or: pongs)
     glyde.continue(pongs + 1)
   })
   |> glyde.run

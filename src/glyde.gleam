@@ -4,26 +4,20 @@
 ////
 //// ```gleam
 //// import envoy
-//// import gleam/int
 //// import glyde
-//// import glyde/draft
 //// import glyde/intents
+//// import glyde/message
 ////
 //// pub fn main() -> Nil {
 ////   use token <- glyde.require_token(envoy.get("DISCORD_TOKEN"))
 ////
-////   let intents = intents.new([intents.Guilds, intents.GuildMessages])
-////
-////   glyde.new(token:, intents:, state: 0)
-////   |> glyde.on_message(fn(pongs, message) {
-////     case message.content {
-////       "!ping" -> {
-////         let pong = draft.text("pong! #" <> int.to_string(pongs + 1))
-////         use _ <- glyde.reply(message, pong)
-////         glyde.continue(pongs + 1)
-////       }
-////       _ -> glyde.continue(pongs)
-////     }
+////   glyde.new(token:, state: 0, intents: intents.new([
+////     intents.Guilds, intents.GuildMessages, intents.MessageContent,
+////   ]))
+////   |> glyde.on_message(fn(pongs, msg) {
+////     use <- glyde.when(msg.content == "!ping", or: pongs)
+////     use _ <- glyde.try(message.reply(msg, message.text("pong!")), or: pongs)
+////     glyde.continue(pongs + 1)
 ////   })
 ////   |> glyde.run
 //// }
@@ -31,10 +25,11 @@
 ////
 //// A handler is given the bot's state and says what happens next: usually
 //// `continue` with the new one, since Gleam has no mutable cell to close over.
-//// `call`, `send` and `reply` describe a request and carry on once the loop
-//// has made it, so a handler never blocks on the network itself. Handlers run
-//// in the order they were added, each seeing what the one before left.
-//// Nothing to remember passes `Nil`.
+//// `try` and `attempt` describe a request and carry on once the loop has made
+//// it, so a handler never blocks on the network itself. `when` guards the rest
+//// of the handler behind a condition. Handlers run in the order they were
+//// added, each seeing what the one before left. Nothing to remember passes
+//// `Nil`.
 ////
 //// `glyde/client` is the layer below, for driving the machine yourself.
 
@@ -43,16 +38,15 @@ import gleam/io
 import gleam/list
 import gleam/result
 import gleam/string
-import glyde/api/channel
-import glyde/draft
 import glyde/event
 import glyde/gateway
 import glyde/id
 import glyde/intents.{type Intents}
+import glyde/interaction
 import glyde/internal/runtime
 import glyde/internal/version
-import glyde/model/message
-import glyde/model/ready
+import glyde/message
+import glyde/ready
 import glyde/rest
 import glyde/rest/body
 import glyde/status
@@ -73,15 +67,17 @@ pub type Ready =
 pub type Event =
   event.Event
 
+pub type Interaction =
+  interaction.Interaction
+
 pub type ChannelId =
   id.ChannelId
 
-/// What `send` and `reply` post, built with `glyde/draft`.
-pub type Draft =
-  draft.Draft
-
 pub type Call(a) =
   rest.Call(a)
+
+pub type CallFailure =
+  status.CallFailure
 
 pub type Failure =
   rest.Failure
@@ -160,6 +156,18 @@ pub fn on_ready(
   }
 }
 
+/// Every INTERACTION_CREATE: slash commands, buttons, autocomplete.
+pub fn on_interaction(
+  bot: Bot(state),
+  handler: fn(state, Interaction) -> Next(state),
+) -> Bot(state) {
+  use state, event <- on_event(bot)
+  case event {
+    event.InteractionCreate(interaction:) -> handler(state, interaction)
+    _ -> continue(state)
+  }
+}
+
 /// Every dispatch, decoded. One glyde does not model arrives as `event.Raw`
 /// with Discord's payload untouched, so the `case` needs no error arm. One
 /// glyde does model whose payload no longer fits arrives as `Raw` too, and the
@@ -194,8 +202,8 @@ pub fn with_transport(bot: Bot(state), transport: Transport) -> Bot(state) {
 /// gateway serviced while it waits, which a handler blocking on its own could
 /// not.
 pub opaque type Next(state) {
-  // A reader over what only the bot knows, so `call` can build the request
-  // and `send` can report a failure without a `Bot` in the handler's hands.
+  // A reader over what only the bot knows, so `attempt` can build the request
+  // without a `Bot` in the handler's hands.
   Next(run: fn(Env) -> runtime.Step(state))
 }
 
@@ -208,16 +216,52 @@ pub fn continue(state: state) -> Next(state) {
   Next(fn(_) { runtime.Done(state) })
 }
 
-/// Any endpoint, so the whole REST builder stays reachable from a handler.
-/// `then` runs once Discord has answered, so what it said can go into the
-/// state you continue with. The last argument, so `use` fits:
+/// Run `then` only when the condition holds; otherwise `continue(fallback)`.
+/// The `bool.guard` shape for a handler:
 ///
 /// ```gleam
-/// use answer <- glyde.call(guild.get(guild_id))
+/// use <- glyde.when(msg.content == "!ping", or: pongs)
 /// ```
-pub fn call(
+pub fn when(
+  cond: Bool,
+  or fallback: state,
+  then next: fn() -> Next(state),
+) -> Next(state) {
+  case cond {
+    True -> next()
+    False -> continue(fallback)
+  }
+}
+
+/// Make a call and hand `then` the answer if it worked, or `continue(fallback)`
+/// if it did not. The failure is dropped, so use `attempt` where the reason
+/// matters.
+///
+/// ```gleam
+/// use posted <- glyde.try(message.reply(msg, message.text("hi")), or: pongs)
+/// ```
+pub fn try(
   call: Call(a),
-  then: fn(Result(a, status.CallFailure)) -> Next(state),
+  or fallback: state,
+  then next: fn(a) -> Next(state),
+) -> Next(state) {
+  use answer <- attempt(call)
+  case answer {
+    Ok(value) -> next(value)
+    Error(_) -> continue(fallback)
+  }
+}
+
+/// Make a call and hand `then` the whole `Result`, so what Discord said or why
+/// it did not can go into the state you continue with. The last argument, so
+/// `use` fits:
+///
+/// ```gleam
+/// use answer <- glyde.attempt(guild.get(guild_id))
+/// ```
+pub fn attempt(
+  call: Call(a),
+  then: fn(Result(a, CallFailure)) -> Next(state),
 ) -> Next(state) {
   Next(fn(env: Env) {
     let built = rest.request(env.rest, call)
@@ -232,10 +276,7 @@ fn lower(next: Next(state), env: Env) -> runtime.Step(state) {
   next.run(env)
 }
 
-fn answered(
-  call: Call(a),
-  answer: runtime.Answer,
-) -> Result(a, status.CallFailure) {
+fn answered(call: Call(a), answer: runtime.Answer) -> Result(a, CallFailure) {
   case answer {
     Ok(response) ->
       rest.response(
@@ -248,30 +289,6 @@ fn answered(
     // The loop never builds a `Refused`: it has no decoder to be refused by.
     Error(unsent) -> Error(unsent)
   }
-}
-
-/// Post to a channel. `then` gets the posted message back, or the reason it
-/// was not posted.
-pub fn send(
-  channel: ChannelId,
-  draft: Draft,
-  then: fn(Result(Message, status.CallFailure)) -> Next(state),
-) -> Next(state) {
-  call(channel.create_message(channel, draft.to_body(draft)), then)
-}
-
-/// `draft |> reply_to(to.id)` sent to `to.channel_id`, so Discord shows it
-/// attached rather than as a bare message.
-///
-/// ```gleam
-/// use posted <- glyde.reply(heard, draft.text("hi") |> draft.embed(card))
-/// ```
-pub fn reply(
-  to: Message,
-  draft: Draft,
-  then: fn(Result(Message, status.CallFailure)) -> Next(state),
-) -> Next(state) {
-  send(to.channel_id, draft.reply_to(draft, to.id), then)
 }
 
 /// Connect, and keep connected until the bot halts. Blocks: the loop is this

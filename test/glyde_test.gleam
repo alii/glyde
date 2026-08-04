@@ -8,12 +8,13 @@ import gleam/json
 import gleam/list
 import gleeunit
 import glyde
-import glyde/api/channel
-import glyde/draft
+import glyde/embed
 import glyde/event
+import glyde/field.{Present}
 import glyde/id
 import glyde/intents
-import glyde/payload/embed
+import glyde/mentions
+import glyde/message
 import glyde/status
 import glyde/testing/frames
 import glyde/transport
@@ -53,9 +54,9 @@ pub fn a_scripted_session_test() {
     did(log, Saw("ready as " <> id.to_string(ready.me.user.id)))
     glyde.continue(pongs)
   })
-  |> glyde.on_message(fn(pongs, message) {
-    did(log, Saw("message " <> message.content))
-    use _ <- glyde.reply(message, draft.text("pong!"))
+  |> glyde.on_message(fn(pongs, msg) {
+    did(log, Saw("message " <> msg.content))
+    use _ <- glyde.try(message.reply(msg, message.text("pong!")), or: pongs)
     glyde.continue(pongs + 1)
   })
   // A second listener is handed what the first left, not the turn's start.
@@ -96,8 +97,9 @@ pub fn a_reply_carries_its_embed_to_the_wire_test() {
   )
   |> glyde.with_transport(recording(log, bodies))
   |> glyde.on_status(fn(_) { Nil })
-  |> glyde.on_message(fn(state, message) {
-    use _ <- glyde.reply(message, draft.text("hi") |> draft.embed(card))
+  |> glyde.on_message(fn(state, msg) {
+    let post = message.reply(msg, message.text("hi") |> message.embed(card))
+    use _ <- glyde.try(post, or: state)
     glyde.continue(state)
   })
   |> glyde.run
@@ -135,13 +137,9 @@ pub fn a_call_answers_into_the_state_test() {
   )
   |> glyde.with_transport(scripted(log))
   |> glyde.on_status(fn(_) { Nil })
-  |> glyde.on_message(fn(last, message) {
-    let post =
-      channel.create_message(
-        message.channel_id,
-        draft.to_body(draft.text("pong!")),
-      )
-    use answer <- glyde.call(post)
+  |> glyde.on_message(fn(last, msg) {
+    let post = message.send(msg.channel_id, message.text("pong!"))
+    use answer <- glyde.attempt(post)
     case answer {
       Ok(posted) -> glyde.continue(id.to_string(posted.id))
       Error(_) -> glyde.continue(last)
@@ -177,9 +175,9 @@ pub fn a_429_is_waited_out_and_retried_test() {
     }),
   )
   |> glyde.on_status(fn(_) { Nil })
-  |> glyde.on_message(fn(state, message) {
-    use answer <- glyde.call(pong(message))
-    did(log, Saw(heard(message, answer)))
+  |> glyde.on_message(fn(state, msg) {
+    use answer <- glyde.attempt(pong(msg))
+    did(log, Saw(heard(msg, answer)))
     glyde.continue(state)
   })
   |> glyde.run
@@ -218,9 +216,9 @@ pub fn a_global_429_holds_every_route_test() {
     ),
   )
   |> glyde.on_status(fn(_) { Nil })
-  |> glyde.on_message(fn(state, message) {
-    use answer <- glyde.call(pong(message))
-    did(log, Saw(heard(message, answer)))
+  |> glyde.on_message(fn(state, msg) {
+    use answer <- glyde.attempt(pong(msg))
+    did(log, Saw(heard(msg, answer)))
     glyde.continue(state)
   })
   |> glyde.run
@@ -264,9 +262,9 @@ pub fn handlers_do_not_interleave_test() {
     ),
   )
   |> glyde.on_status(fn(_) { Nil })
-  |> glyde.on_message(fn(handled, message) {
-    did(log, Saw(message.content <> " sees " <> int.to_string(handled)))
-    use _ <- glyde.call(pong(message))
+  |> glyde.on_message(fn(handled, msg) {
+    did(log, Saw(msg.content <> " sees " <> int.to_string(handled)))
+    use _ <- glyde.attempt(pong(msg))
     glyde.continue(handled + 1)
   })
   |> glyde.run
@@ -279,6 +277,117 @@ pub fn handlers_do_not_interleave_test() {
       Saw("2 sees 1"),
       Posted(path_a, at: 3000),
     ]
+}
+
+/// `when` runs `then` on true and `continue(or)` on false, so a bot can gate
+/// the rest of a handler without a `case`.
+pub fn when_guards_the_rest_of_a_handler_test() {
+  let log = booklet.new([])
+
+  glyde.new(
+    token: frames.token,
+    state: 0,
+    intents: intents.new([intents.GuildMessages]),
+  )
+  |> glyde.with_transport(scripted(log))
+  |> glyde.on_status(fn(_) { Nil })
+  |> glyde.on_message(fn(pongs, msg) {
+    use <- glyde.when(msg.content == "!ping", or: pongs)
+    did(log, Saw("guarded " <> msg.content))
+    glyde.continue(pongs + 1)
+  })
+  |> glyde.on_message(fn(pongs, _) {
+    did(log, Saw("tally " <> int.to_string(pongs)))
+    glyde.continue(pongs)
+  })
+  |> glyde.run
+
+  // Both scripted messages are "!ping", so both pass the guard.
+  let steps = booklet.get(log)
+  assert list.contains(steps, Saw("guarded !ping"))
+  assert list.contains(steps, Saw("tally 2"))
+}
+
+/// `try` unwraps a good answer and falls back to `or` on a bad one.
+pub fn try_falls_back_on_failure_and_unwraps_on_success_test() {
+  let log = booklet.new([])
+  let tries = booklet.new(0)
+
+  glyde.new(
+    token: frames.token,
+    state: "start",
+    intents: intents.new([intents.GuildMessages]),
+  )
+  |> glyde.with_transport(
+    timed(
+      log,
+      [
+        #(0, [create("1", channel_a)]),
+        #(500, [create("2", channel_a)]),
+        #(60_000, [fatal()]),
+      ],
+      fn(_) {
+        // Every attempt at the first message is a 429; the second is fine.
+        // Three 429s exhausts `max_attempts`, so `try` sees the failure.
+        case bump(tries) {
+          1 | 2 | 3 -> too_fast("1", global: False)
+          _ -> created()
+        }
+      },
+    ),
+  )
+  |> glyde.on_status(fn(_) { Nil })
+  |> glyde.on_message(fn(state, msg) {
+    use posted <- glyde.try(pong(msg), or: state)
+    glyde.continue("posted " <> id.to_string(posted.id))
+  })
+  |> glyde.on_message(fn(state, msg) {
+    did(log, Saw(msg.content <> " leaves " <> state))
+    glyde.continue(state)
+  })
+  |> glyde.run
+
+  let steps = booklet.get(log)
+  // First message: three 429s then a fallback, so state stays "start".
+  assert list.contains(steps, Saw("1 leaves start"))
+  // Second: 200, so `try` unwraps into `then`.
+  assert list.contains(steps, Saw("2 leaves posted 1000000000000000004"))
+}
+
+/// A reply then an edit of the same message, chained through `try`. The second
+/// call is built from the first's answer, so the id has to travel.
+pub fn a_reply_then_an_edit_chain_through_try_test() {
+  let log = booklet.new([])
+  let paths = booklet.new([])
+
+  let recording = fn() {
+    let base = scripted(log)
+    transport.Transport(..base, request: fn(built: Request(BitArray)) {
+      booklet.update(paths, fn(seen) { [built.path, ..seen] })
+      base.request(built)
+    })
+  }
+
+  glyde.new(
+    token: frames.token,
+    state: Nil,
+    intents: intents.new([intents.GuildMessages]),
+  )
+  |> glyde.with_transport(recording())
+  |> glyde.on_status(fn(_) { Nil })
+  |> glyde.on_message(fn(state, msg) {
+    use posted <- glyde.try(message.reply(msg, message.text("v1")), or: state)
+    let change =
+      message.Edit(..message.new_edit(mentions.none()), content: Present("v2"))
+    use _ <- glyde.try(message.edit(posted, change), or: state)
+    glyde.continue(state)
+  })
+  |> glyde.run
+
+  // Per scripted message: one POST then one PATCH to the message it returned.
+  let seen = list.reverse(booklet.get(paths))
+  assert list.contains(seen, messages_path)
+  assert list.contains(seen, messages_path <> "/1000000000000000004")
 }
 
 /// The wait for a permit happens on the socket, so a heartbeat that comes due
@@ -307,8 +416,8 @@ pub fn the_heart_beats_through_a_limiter_wait_test() {
     ),
   )
   |> glyde.on_status(fn(_) { Nil })
-  |> glyde.on_message(fn(state, message) {
-    use _ <- glyde.call(pong(message))
+  |> glyde.on_message(fn(state, msg) {
+    use _ <- glyde.attempt(pong(msg))
     glyde.continue(state)
   })
   |> glyde.run
@@ -331,8 +440,8 @@ const channel_b: String = "1000000000000000009"
 
 const path_b: String = "/api/v10/channels/1000000000000000009/messages"
 
-fn pong(message: glyde.Message) -> glyde.Call(glyde.Message) {
-  channel.create_message(message.channel_id, draft.to_body(draft.text("pong!")))
+fn pong(msg: glyde.Message) -> glyde.Call(glyde.Message) {
+  message.send(msg.channel_id, message.text("pong!"))
 }
 
 fn heard(

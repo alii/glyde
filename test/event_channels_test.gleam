@@ -2,9 +2,9 @@ import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/json
 import gleam/option.{None, Some}
+import glyde/channel
 import glyde/event
 import glyde/id
-import glyde/model/channel
 
 fn payload(text: String) -> Dynamic {
   let assert Ok(value) = json.parse(text, decode.dynamic)
