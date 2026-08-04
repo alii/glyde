@@ -16,6 +16,7 @@
 //// ```
 
 import gleam/bit_array
+import gleam/bool
 import gleam/dynamic/decode.{type Decoder}
 import gleam/http.{type Header, Delete, Get, Https, Patch, Post, Put}
 import gleam/http/request.{type Request, Request} as _
@@ -253,22 +254,24 @@ pub fn response(
   // Discord answers in UTF-8 everywhere, so a body that is not text came from
   // something in between. Reading it as an empty one would report a proxy's
   // binary page as a JSON decode failure.
-  case bit_array.to_string(body) {
-    Error(_) ->
-      Error(error.not_text(status:, headers:, bytes: bit_array.byte_size(body)))
-    Ok(text) ->
-      case status >= 200 && status < 300 {
-        True ->
-          case call.expect {
-            NoContent(value) -> Ok(value)
-            Decoded(decoder) ->
-              json.parse(text, decoder)
-              |> result.map_error(fn(failure) {
-                error.Malformed(error.DecodeFailure(error: failure, raw: text))
-              })
-          }
-        False -> Error(error.from_response(status:, headers:, body: text))
-      }
+  use text <- result.try(
+    bit_array.to_string(body)
+    |> result.replace_error(error.not_text(
+      status:,
+      headers:,
+      bytes: bit_array.byte_size(body),
+    )),
+  )
+  use <- bool.lazy_guard(status < 200 || status >= 300, fn() {
+    Error(error.from_response(status:, headers:, body: text))
+  })
+  case call.expect {
+    NoContent(value) -> Ok(value)
+    Decoded(decoder) ->
+      json.parse(text, decoder)
+      |> result.map_error(fn(failure) {
+        error.Malformed(error.DecodeFailure(error: failure, raw: text))
+      })
   }
 }
 

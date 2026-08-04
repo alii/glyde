@@ -225,10 +225,7 @@ pub fn dispatch(name: String, data: Dynamic) -> Dispatch {
 /// The question to ask about a `Raw`: an unmodelled name is ordinary, a
 /// modelled one that came back `Raw` is a payload that did not fit.
 pub fn is_modelled(name: String) -> Bool {
-  case decoder_for(name) {
-    Some(_) -> True
-    None -> False
-  }
+  option.is_some(decoder_for(name))
 }
 
 /// The wire `t` an event came from. The inverse of `decoder_for`'s table: a

@@ -17,6 +17,7 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some} as _
 import gleam/order.{type Order}
+import gleam/result
 import gleam/string
 import glyde/channel
 import glyde/emoji
@@ -72,11 +73,11 @@ pub opaque type RawPayload {
 
 /// `Error(Nil)` when the value is not a JSON object. Decoders fall back to
 /// `empty_raw_payload`; nothing else needs to.
-pub fn raw_payload(value: Dynamic) -> Result(RawPayload, Nil) {
-  case decode.run(value, decode.dict(decode.string, raw_decoder())) {
-    Ok(entries) -> Ok(RawPayload(entries:))
-    Error(_) -> Error(Nil)
-  }
+pub fn raw_payload(
+  value: Dynamic,
+) -> Result(RawPayload, List(decode.DecodeError)) {
+  decode.run(value, decode.dict(decode.string, raw_decoder()))
+  |> result.map(RawPayload)
 }
 
 pub fn empty_raw_payload() -> RawPayload {
@@ -461,10 +462,7 @@ pub fn row_child_decoder() -> Decoder(RowChild) {
 /// above has already ruled that out. Everywhere else holds a `RawPayload`, so
 /// no encoder has to guess what to do with a failure.
 fn raw_or_empty(value: Dynamic) -> RawPayload {
-  case raw_payload(value) {
-    Ok(payload) -> payload
-    Error(Nil) -> empty_raw_payload()
-  }
+  raw_payload(value) |> result.lazy_unwrap(empty_raw_payload)
 }
 
 pub fn select_option_decoder() -> Decoder(SelectOption) {

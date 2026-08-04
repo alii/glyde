@@ -29,6 +29,7 @@
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import glyde/client
 import glyde/gateway.{
@@ -623,10 +624,8 @@ pub fn run(scenario: Scenario, adapter: Adapter(bot)) -> Report {
   // be scored against a world the script never actually reached.
   let played =
     list.index_fold(scenario.beats, Ok(started), fn(so_far, beat, at) {
-      case so_far {
-        Ok(trial) -> play(adapter, trial, beat, at, scenario.expect)
-        Error(_) -> so_far
-      }
+      use trial <- result.try(so_far)
+      play(adapter, trial, beat, at, scenario.expect)
     })
 
   let verdict = case played {

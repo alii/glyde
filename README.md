@@ -17,9 +17,10 @@ import gleam/io
 import glyde
 import glyde/intents
 import glyde/message
+import glyde/status
 
 pub fn main() -> Nil {
-  use token <- glyde.require_token(envoy.get("DISCORD_TOKEN"))
+  let assert Ok(token) = envoy.get("DISCORD_TOKEN")
 
   glyde.new(
     token:,
@@ -37,8 +38,14 @@ pub fn main() -> Nil {
   |> glyde.on_message(fn(pongs, msg) {
     use <- glyde.when(msg.content == "!ping", or: pongs)
     let pong = message.text("pong! #" <> int.to_string(pongs + 1))
-    use _ <- glyde.try(message.reply(msg, pong), or: pongs)
-    glyde.continue(pongs + 1)
+    use posted <- glyde.do(message.reply(msg, pong))
+    case posted {
+      Ok(_) -> glyde.continue(pongs + 1)
+      Error(why) -> {
+        io.println("could not reply: " <> status.describe_failure(why))
+        glyde.continue(pongs)
+      }
+    }
   })
   |> glyde.run
 }

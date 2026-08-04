@@ -9,6 +9,7 @@ import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import gleam/json.{type Json}
 import gleam/order.{type Order}
+import gleam/result
 import gleam/string
 
 pub opaque type Id(kind) {
@@ -240,10 +241,7 @@ pub fn created_at_ms(id: Id(kind)) -> Result(Int, Nil) {
 /// oldest snowflake there is, so an ID that is not one sorts as ancient
 /// rather than as this instant.
 pub fn created_at_ms_or(id: Id(kind), default default: Int) -> Int {
-  case created_at_ms(id) {
-    Ok(at) -> at
-    Error(Nil) -> default
-  }
+  created_at_ms(id) |> result.unwrap(default)
 }
 
 /// Discord's epoch, 2015-01-01T00:00:00Z, in milliseconds.

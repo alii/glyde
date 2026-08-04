@@ -7,6 +7,7 @@ import gleam/http/response.{type Response}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import glyde/client
 import glyde/event.{type Event}
 import glyde/gateway
@@ -301,11 +302,7 @@ fn perform(
 /// `headers.outcome` reads the body on a 429 only, so nothing else is decoded.
 fn throttle_body(got: Response(BitArray)) -> String {
   case got.status {
-    429 ->
-      case bit_array.to_string(got.body) {
-        Ok(text) -> text
-        Error(_) -> ""
-      }
+    429 -> bit_array.to_string(got.body) |> result.unwrap("")
     _ -> ""
   }
 }

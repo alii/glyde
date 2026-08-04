@@ -19,6 +19,19 @@ import glyde/status
 import glyde/testing/frames
 import glyde/transport
 
+/// The scripted transport controls what these calls return, so a failure here
+/// is the test's own fault.
+fn expect(
+  call: glyde.Call(a),
+  then next: fn(a) -> glyde.Next(state),
+) -> glyde.Next(state) {
+  use answer <- glyde.do(call)
+  case answer {
+    Ok(value) -> next(value)
+    Error(_) -> panic as "scripted call failed"
+  }
+}
+
 pub fn main() -> Nil {
   gleeunit.main()
 }
@@ -56,7 +69,7 @@ pub fn a_scripted_session_test() {
   })
   |> glyde.on_message(fn(pongs, msg) {
     did(log, Saw("message " <> msg.content))
-    use _ <- glyde.try(message.reply(msg, message.text("pong!")), or: pongs)
+    use _ <- expect(message.reply(msg, message.text("pong!")))
     glyde.continue(pongs + 1)
   })
   // A second listener is handed what the first left, not the turn's start.
@@ -99,7 +112,7 @@ pub fn a_reply_carries_its_embed_to_the_wire_test() {
   |> glyde.on_status(fn(_) { Nil })
   |> glyde.on_message(fn(state, msg) {
     let post = message.reply(msg, message.text("hi") |> message.embed(card))
-    use _ <- glyde.try(post, or: state)
+    use _ <- expect(post)
     glyde.continue(state)
   })
   |> glyde.run
@@ -139,7 +152,7 @@ pub fn a_call_answers_into_the_state_test() {
   |> glyde.on_status(fn(_) { Nil })
   |> glyde.on_message(fn(last, msg) {
     let post = message.send(msg.channel_id, message.text("pong!"))
-    use answer <- glyde.attempt(post)
+    use answer <- glyde.do(post)
     case answer {
       Ok(posted) -> glyde.continue(id.to_string(posted.id))
       Error(_) -> glyde.continue(last)
@@ -176,7 +189,7 @@ pub fn a_429_is_waited_out_and_retried_test() {
   )
   |> glyde.on_status(fn(_) { Nil })
   |> glyde.on_message(fn(state, msg) {
-    use answer <- glyde.attempt(pong(msg))
+    use answer <- glyde.do(pong(msg))
     did(log, Saw(heard(msg, answer)))
     glyde.continue(state)
   })
@@ -217,7 +230,7 @@ pub fn a_global_429_holds_every_route_test() {
   )
   |> glyde.on_status(fn(_) { Nil })
   |> glyde.on_message(fn(state, msg) {
-    use answer <- glyde.attempt(pong(msg))
+    use answer <- glyde.do(pong(msg))
     did(log, Saw(heard(msg, answer)))
     glyde.continue(state)
   })
@@ -264,7 +277,7 @@ pub fn handlers_do_not_interleave_test() {
   |> glyde.on_status(fn(_) { Nil })
   |> glyde.on_message(fn(handled, msg) {
     did(log, Saw(msg.content <> " sees " <> int.to_string(handled)))
-    use _ <- glyde.attempt(pong(msg))
+    use _ <- glyde.do(pong(msg))
     glyde.continue(handled + 1)
   })
   |> glyde.run
@@ -308,8 +321,8 @@ pub fn when_guards_the_rest_of_a_handler_test() {
   assert list.contains(steps, Saw("tally 2"))
 }
 
-/// `try` unwraps a good answer and falls back to `or` on a bad one.
-pub fn try_falls_back_on_failure_and_unwraps_on_success_test() {
+/// `try` unwraps into `then` on success and hands the failure to `or`.
+pub fn do_hands_back_the_result_test() {
   let log = booklet.new([])
   let tries = booklet.new(0)
 
@@ -338,8 +351,11 @@ pub fn try_falls_back_on_failure_and_unwraps_on_success_test() {
   )
   |> glyde.on_status(fn(_) { Nil })
   |> glyde.on_message(fn(state, msg) {
-    use posted <- glyde.try(pong(msg), or: state)
-    glyde.continue("posted " <> id.to_string(posted.id))
+    use posted <- glyde.do(pong(msg))
+    case posted {
+      Ok(posted) -> glyde.continue("posted " <> id.to_string(posted.id))
+      Error(_) -> glyde.continue(state)
+    }
   })
   |> glyde.on_message(fn(state, msg) {
     did(log, Saw(msg.content <> " leaves " <> state))
@@ -376,10 +392,10 @@ pub fn a_reply_then_an_edit_chain_through_try_test() {
   |> glyde.with_transport(recording())
   |> glyde.on_status(fn(_) { Nil })
   |> glyde.on_message(fn(state, msg) {
-    use posted <- glyde.try(message.reply(msg, message.text("v1")), or: state)
+    use posted <- expect(message.reply(msg, message.text("v1")))
     let change =
       message.Edit(..message.new_edit(mentions.none()), content: Present("v2"))
-    use _ <- glyde.try(message.edit(posted, change), or: state)
+    use _ <- expect(message.edit(posted, change))
     glyde.continue(state)
   })
   |> glyde.run
@@ -417,7 +433,7 @@ pub fn the_heart_beats_through_a_limiter_wait_test() {
   )
   |> glyde.on_status(fn(_) { Nil })
   |> glyde.on_message(fn(state, msg) {
-    use _ <- glyde.attempt(pong(msg))
+    use _ <- glyde.do(pong(msg))
     glyde.continue(state)
   })
   |> glyde.run

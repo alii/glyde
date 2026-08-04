@@ -545,19 +545,16 @@ fn gateway_create(
   channels channels: Option(List(channel.Channel)),
   threads threads: Option(List(channel.Channel)),
 ) -> Option(GatewayCreate) {
-  case joined_at {
-    None -> None
-    Some(joined_at) ->
-      Some(GatewayCreate(
-        joined_at:,
-        large: option.unwrap(large, False),
-        member_count: option.unwrap(member_count, 0),
-        voice_states: option.unwrap(voice_states, []),
-        members: option.unwrap(members, []),
-        channels: option.unwrap(channels, []),
-        threads: option.unwrap(threads, []),
-      ))
-  }
+  use joined_at <- option.map(joined_at)
+  GatewayCreate(
+    joined_at:,
+    large: option.unwrap(large, False),
+    member_count: option.unwrap(member_count, 0),
+    voice_states: option.unwrap(voice_states, []),
+    members: option.unwrap(members, []),
+    channels: option.unwrap(channels, []),
+    threads: option.unwrap(threads, []),
+  )
 }
 
 /// GUILD_CREATE dispatches on the VALUE of `unavailable`: an available guild

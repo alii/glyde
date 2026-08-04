@@ -9,15 +9,16 @@
 //// import glyde/message
 ////
 //// pub fn main() -> Nil {
-////   use token <- glyde.require_token(envoy.get("DISCORD_TOKEN"))
+////   let assert Ok(token) = envoy.get("DISCORD_TOKEN")
 ////
 ////   glyde.new(token:, state: 0, intents: intents.new([
 ////     intents.Guilds, intents.GuildMessages, intents.MessageContent,
 ////   ]))
 ////   |> glyde.on_message(fn(pongs, msg) {
 ////     use <- glyde.when(msg.content == "!ping", or: pongs)
-////     use _ <- glyde.try(message.reply(msg, message.text("pong!")), or: pongs)
-////     glyde.continue(pongs + 1)
+////     use posted <- glyde.do(message.reply(msg, message.text("pong!")))
+////     let pongs = case posted { Ok(_) -> pongs + 1 Error(_) -> pongs }
+////     glyde.continue(pongs)
 ////   })
 ////   |> glyde.run
 //// }
@@ -34,10 +35,8 @@
 //// `glyde/client` is the layer below, for driving the machine yourself.
 
 import gleam/http/request
-import gleam/io
 import gleam/list
 import gleam/result
-import gleam/string
 import glyde/event
 import glyde/gateway
 import glyde/id
@@ -99,18 +98,6 @@ pub opaque type Bot(state) {
     status: fn(status.Status) -> Nil,
     transport: Transport,
   )
-}
-
-/// Read a token, or panic. Right in `main`, where the alternative is a bot
-/// that looks like it started and is closed with 4004 ten seconds later.
-pub fn require_token(source: Result(String, a), next: fn(String) -> b) -> b {
-  case result.map(source, string.trim) {
-    Ok(token) if token != "" -> next(token)
-    _ -> {
-      io.println_error("glyde: no bot token, so there is nothing to connect to")
-      panic as "no bot token"
-    }
-  }
 }
 
 /// One shard, no compression, a real socket, and a line on stderr when
@@ -233,33 +220,14 @@ pub fn when(
   }
 }
 
-/// Make a call and hand `then` the answer if it worked, or `continue(fallback)`
-/// if it did not. The failure is dropped, so use `attempt` where the reason
-/// matters.
-///
-/// ```gleam
-/// use posted <- glyde.try(message.reply(msg, message.text("hi")), or: pongs)
-/// ```
-pub fn try(
-  call: Call(a),
-  or fallback: state,
-  then next: fn(a) -> Next(state),
-) -> Next(state) {
-  use answer <- attempt(call)
-  case answer {
-    Ok(value) -> next(value)
-    Error(_) -> continue(fallback)
-  }
-}
-
 /// Make a call and hand `then` the whole `Result`, so what Discord said or why
 /// it did not can go into the state you continue with. The last argument, so
 /// `use` fits:
 ///
 /// ```gleam
-/// use answer <- glyde.attempt(guild.get(guild_id))
+/// use answer <- glyde.do(guild.get(guild_id))
 /// ```
-pub fn attempt(
+pub fn do(
   call: Call(a),
   then: fn(Result(a, CallFailure)) -> Next(state),
 ) -> Next(state) {
@@ -267,7 +235,7 @@ pub fn attempt(
     let built = rest.request(env.rest, call)
     let built = request.set_body(built, body.to_bits(built.body))
     runtime.Perform(request: built, route: rest.route(call), resume: fn(answer) {
-      lower(then(answered(call, answer)), env)
+      call |> answered(answer) |> then() |> lower(env)
     })
   })
 }
@@ -277,18 +245,14 @@ fn lower(next: Next(state), env: Env) -> runtime.Step(state) {
 }
 
 fn answered(call: Call(a), answer: runtime.Answer) -> Result(a, CallFailure) {
-  case answer {
-    Ok(response) ->
-      rest.response(
-        call,
-        status: response.status,
-        headers: response.headers,
-        body: response.body,
-      )
-      |> result.map_error(status.Refused)
-    // The loop never builds a `Refused`: it has no decoder to be refused by.
-    Error(unsent) -> Error(unsent)
-  }
+  use response <- result.try(answer)
+  rest.response(
+    call,
+    status: response.status,
+    headers: response.headers,
+    body: response.body,
+  )
+  |> result.map_error(status.Refused)
 }
 
 /// Connect, and keep connected until the bot halts. Blocks: the loop is this

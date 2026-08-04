@@ -83,10 +83,7 @@ fn known_embed_type(value: String) -> Option(EmbedType) {
 }
 
 pub fn embed_type_from_string(value: String) -> EmbedType {
-  case known_embed_type(value) {
-    Some(known) -> known
-    None -> UnknownEmbedType(value)
-  }
+  known_embed_type(value) |> option.unwrap(UnknownEmbedType(value))
 }
 
 pub fn embed_type_to_string(value: EmbedType) -> String {

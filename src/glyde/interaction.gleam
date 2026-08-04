@@ -773,10 +773,8 @@ pub fn find_option(
   name: String,
 ) -> Option(InteractionOption) {
   let #(_path, leaves) = subcommand_path(options)
-  case list.find(leaves, fn(option) { option.name == name }) {
-    Ok(found) -> Some(found)
-    Error(Nil) -> None
-  }
+  list.find(leaves, fn(option) { option.name == name })
+  |> option.from_result
 }
 
 fn value_of(
@@ -906,10 +904,8 @@ pub fn focused_option(
       case first.focused {
         True -> Some(first)
         False ->
-          case focused_option(first.options) {
-            Some(found) -> Some(found)
-            None -> focused_option(rest)
-          }
+          focused_option(first.options)
+          |> option.lazy_or(fn() { focused_option(rest) })
       }
   }
 }

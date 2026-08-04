@@ -316,7 +316,8 @@ pub fn an_unmodelled_component_writes_the_type_it_reports_test() {
 /// that writes no keys is the empty one, asked for by name.
 pub fn a_payload_that_is_not_an_object_is_refused_test() {
   let assert Ok(not_an_object) = json.parse("[1,2]", decode.dynamic)
-  assert component.raw_payload(not_an_object) == Error(Nil)
+  assert component.raw_payload(not_an_object)
+    == Error([decode.DecodeError("Dict", "List", [])])
 
   assert encode(UnknownComponent(type_: 17, raw: component.empty_raw_payload()))
     == "{\"type\":17}"

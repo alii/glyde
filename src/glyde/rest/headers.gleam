@@ -13,6 +13,7 @@ import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import glyde/rest/limiter.{GlobalScope, SharedScope, UserScope}
 import glyde/wire
@@ -131,27 +132,22 @@ pub fn rejected_status(why: RejectedWhy) -> Int {
 pub fn seconds_to_ms(raw: String) -> Result(Int, Nil) {
   let text = string.trim(raw)
   case string.starts_with(text, "-") {
-    True ->
-      case positive_ms(string.drop_start(text, 1)) {
-        Ok(_) -> Ok(0)
-        Error(_) -> Error(Nil)
-      }
+    True -> string.drop_start(text, 1) |> positive_ms |> result.replace(0)
     False -> positive_ms(text)
   }
 }
 
 fn positive_ms(text: String) -> Result(Int, Nil) {
   case string.split_once(text, ".") {
-    Error(_) ->
-      case int.parse(text) {
-        Ok(seconds) -> exact(seconds * 1000)
-        Error(_) -> Error(Nil)
-      }
-    Ok(#(whole, fraction)) ->
-      case seconds_part(whole), millis_part(fraction) {
-        Ok(seconds), Ok(millis) -> exact(seconds * 1000 + millis)
-        _, _ -> Error(Nil)
-      }
+    Error(_) -> {
+      use seconds <- result.try(int.parse(text))
+      exact(seconds * 1000)
+    }
+    Ok(#(whole, fraction)) -> {
+      use seconds <- result.try(seconds_part(whole))
+      use millis <- result.try(millis_part(fraction))
+      exact(seconds * 1000 + millis)
+    }
   }
 }
 
@@ -182,7 +178,7 @@ fn millis_part(text: String) -> Result(Int, Nil) {
         string.slice(text, at_index: 0, length: 3)
         |> string.pad_end(to: 3, with: "0")
         |> int.parse
-        |> unwrap_or_zero
+        |> result.unwrap(0)
       case
         string.drop_start(text, 3) |> string.to_graphemes |> list.any(nonzero)
       {
@@ -190,13 +186,6 @@ fn millis_part(text: String) -> Result(Int, Nil) {
         False -> Ok(millis)
       }
     }
-  }
-}
-
-fn unwrap_or_zero(parsed: Result(Int, Nil)) -> Int {
-  case parsed {
-    Ok(value) -> value
-    Error(_) -> 0
   }
 }
 
@@ -320,25 +309,16 @@ pub fn resolve_scope(headers: List(Header), body: BodyEvidence) -> Scope {
 }
 
 fn whole_number(headers: List(Header), name: String) -> Option(Int) {
-  case header(headers, name) {
-    Some(raw) ->
-      case int.parse(string.trim(raw)) {
-        Ok(value) -> option.from_result(exact(value))
-        Error(_) -> None
-      }
-    None -> None
-  }
+  use raw <- option.then(header(headers, name))
+  string.trim(raw)
+  |> int.parse
+  |> result.try(exact)
+  |> option.from_result
 }
 
 fn delay(headers: List(Header), name: String) -> Option(Int) {
-  case header(headers, name) {
-    Some(raw) ->
-      case seconds_to_ms(raw) {
-        Ok(ms) -> Some(ms)
-        Error(_) -> None
-      }
-    None -> None
-  }
+  use raw <- option.then(header(headers, name))
+  seconds_to_ms(raw) |> option.from_result
 }
 
 /// One header by name, `None` when it did not arrive. Adapters hand names over

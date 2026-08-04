@@ -11,6 +11,7 @@ import gleam/int
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
 import glyde/channel
 import glyde/component
@@ -611,10 +612,8 @@ pub fn option_decoder() -> Decoder(ApplicationCommandOption) {
 /// unmodelled payload keep it the same way. The failure arm is unreachable
 /// from here: `option_decoder` has already read this value as an object.
 fn raw_payload(value: Dynamic) -> component.RawPayload {
-  case component.raw_payload(value) {
-    Ok(payload) -> payload
-    Error(Nil) -> component.empty_raw_payload()
-  }
+  component.raw_payload(value)
+  |> result.lazy_unwrap(component.empty_raw_payload)
 }
 
 /// Discord never sends both, and if it ever did the choices are the half that
