@@ -2,14 +2,16 @@
 //// client, one clock. `glyde.with_transport` swaps it for a proxy, a
 //// recording double, or a script in a test.
 ////
-//// Stdlib and `gleam_http` only. Writing a transport must not drag in the
-//// Erlang one, which lives in `glyde/transport/erlang`.
+//// Nothing here reaches Erlang or the gateway. Writing a transport must not
+//// drag in the built-in one, which lives in `glyde/transport/erlang`.
 ////
 //// Not `glyde/client.Transport`, which is the six outputs of the pure state
 //// machine. This is the platform underneath one.
 
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
+import gleam/option.{type Option}
+import glyde/websocket/sendcode
 
 /// Why an HTTP request came back with nothing. A shape and not a rendering, so
 /// a caller can tell a timeout from a name that does not resolve.
@@ -32,6 +34,19 @@ pub type Unreachable {
 pub type Answer =
   Result(Response(BitArray), Unreachable)
 
+/// Why a `Closed` carries 1006 with no words of the peer's: no close frame
+/// arrived, and this is what the transport itself has to say instead.
+pub type CloseCause {
+  /// The transport gave out: a name that does not resolve, a refused port, a
+  /// write or read that came back dead on a live socket.
+  TransportFailed(detail: String)
+
+  /// The upgrade was answered and it was not 101. Discord sends 401 for a dead
+  /// token and 429 for a bot dialling too often, and the shard reads the
+  /// number. A transport that cannot see one reports `TransportFailed` instead.
+  UpgradeRefused(status: Int, detail: String)
+}
+
 /// What a socket says, in order: `Opened` at most once and before everything,
 /// then messages, then exactly one `Closed`.
 pub type Event {
@@ -45,16 +60,10 @@ pub type Event {
   BinaryMessage(bytes: BitArray)
 
   /// 1006 means no close frame at all: a dial that never connected, a dead
-  /// transport, a close of your own. 1005 means the peer named no code.
-  Closed(code: Int, reason: String)
-
-  /// Advisory: a `Closed` always follows and that is what ends the socket.
-  Failed(reason: String)
-
-  /// The upgrade was answered and it was not 101. Discord sends 401 for a dead
-  /// token and 429 for a bot dialling too often, and the shard reads the
-  /// number. A transport that cannot see one reports `Failed` instead.
-  Refused(status: Int, reason: String)
+  /// transport, a close of your own. 1005 means the peer named no code. `cause`
+  /// is set when the transport, not the peer's close frame, has the story:
+  /// there is no separate advisory before it.
+  Closed(code: Int, reason: String, cause: Option(CloseCause))
 }
 
 /// Everything the built-in runtime asks of the outside world. Every function
@@ -83,7 +92,7 @@ pub type Socket {
     send: fn(String) -> Bool,
     /// Write a close frame with this code, then tear the socket down. Nothing
     /// to report: the socket is finished either way.
-    close: fn(Int) -> Nil,
+    close: fn(sendcode.SendCode) -> Nil,
     /// Abandon the socket with no close frame. Nothing to report, as above.
     drop: fn() -> Nil,
     /// Block until the socket says something or `in_ms` passes, then answer

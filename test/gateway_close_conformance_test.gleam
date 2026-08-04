@@ -10,6 +10,7 @@ import glyde/gateway/close.{
   InvalidShard, Reconnect, ReconnectFresh, ReconnectResume, ReconnectThrottled,
   ShardingRequired, Terminal, Unfixable,
 }
+import glyde/websocket/sendcode
 
 /// Every close code Discord documents, one per row, so a change to the
 /// unknown-code rule cannot drag a documented one along with it.
@@ -81,9 +82,9 @@ pub fn transport_failure_resumes_test() {
 /// A close we initiate is decided before the frame goes out, and it is the
 /// intent, not the code, that says whether the session is still ours.
 pub fn self_initiated_closes_carry_their_intent_test() {
-  assert close.code(Terminal) == 1000
-  assert close.code(Reconnect) == 4000
-  assert close.code(FreshIdentify) == 4000
+  assert sendcode.to_int(close.code(Terminal)) == 1000
+  assert sendcode.to_int(close.code(Reconnect)) == 4000
+  assert sendcode.to_int(close.code(FreshIdentify)) == 4000
 
   assert close.intent_keeps_session(Reconnect)
   // 4000 leaves the session resumable at Discord's end. We drop it anyway.
@@ -94,7 +95,7 @@ pub fn self_initiated_closes_carry_their_intent_test() {
 /// The docs' invalidation rule covers only the close we initiate, so a 1000 we
 /// sent and a 1000 Discord sent must not mean the same thing.
 pub fn the_same_code_differs_by_direction_test() {
-  assert close.code(Terminal) == 1000
+  assert sendcode.to_int(close.code(Terminal)) == 1000
   assert !close.intent_keeps_session(Terminal)
 
   assert close.session_survives(close.from_gateway(Some(1000)))
@@ -223,7 +224,7 @@ pub fn every_fatal_reason_has_a_remedy_test() {
 /// send, so there are exactly three that can go out.
 pub fn only_a_terminal_close_sends_a_session_ending_code_test() {
   list.each([Reconnect, FreshIdentify, Terminal], fn(intent) {
-    let code = close.code(intent)
+    let code = sendcode.to_int(close.code(intent))
     let ends = code == 1000 || code == 1001
     assert #(intent, ends) == #(intent, intent == Terminal)
   })

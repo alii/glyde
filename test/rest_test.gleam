@@ -114,7 +114,8 @@ pub fn no_query_means_no_question_mark_test() {
 }
 
 pub fn query_is_percent_encoded_test() {
-  let call = rest.query(create_message(), query.one("query", "a&b=c"))
+  let call =
+    rest.query(create_message(), query.one("query", "a&b=c", query.text))
   assert rest.request(config(), call).query == Some("query=a%26b%3Dc")
 }
 
@@ -122,14 +123,14 @@ pub fn query_is_percent_encoded_test() {
 pub fn query_repeats_a_key_test() {
   let call =
     create_message()
-    |> rest.query(query.one("id", "123"))
-    |> rest.query(query.one("id", "456"))
+    |> rest.query(query.one("id", "123", query.text))
+    |> rest.query(query.one("id", "456", query.text))
   assert rest.request(config(), call).query == Some("id=123&id=456")
 }
 
 /// Zero is a value; absence is the caller leaving the pair out.
 pub fn query_keeps_a_zero_test() {
-  let call = rest.query(create_message(), query.one("limit", query.number(0)))
+  let call = rest.query(create_message(), query.one("limit", 0, query.number))
   assert rest.request(config(), call).query == Some("limit=0")
 }
 
@@ -137,7 +138,10 @@ pub fn query_joins_with_ampersand_and_no_leading_one_test() {
   let call =
     rest.query(
       create_message(),
-      list.flatten([query.one("a", "1"), query.one("b", "2")]),
+      list.flatten([
+        query.one("a", "1", query.text),
+        query.one("b", "2", query.text),
+      ]),
     )
   assert rest.request(config(), call).query == Some("a=1&b=2")
 }
@@ -153,6 +157,36 @@ pub fn authorization_table_test() {
     let request = rest.request(rest.config(token), create_message())
     assert list.key_find(request.headers, "authorization") == expected
   })
+}
+
+/// A path that carries its own secret sends no `Authorization` header. The
+/// segment kind decides, so a new webhook route cannot forget to drop it.
+pub fn a_path_credential_drops_the_authorization_header_test() {
+  let hook: id.WebhookId = id.from_string("1234567890123456789")
+  let with_token =
+    rest.post(
+      [seg.lit("webhooks"), seg.webhook(hook, "s3cret")],
+      body.NoBody,
+      rest.NoContent(Nil),
+    )
+  let interaction =
+    rest.post(
+      [
+        seg.lit("interactions"),
+        seg.id(hook),
+        seg.credential("s3cret"),
+        seg.lit("callback"),
+      ],
+      body.NoBody,
+      rest.NoContent(Nil),
+    )
+  let tokenless =
+    rest.get([seg.lit("webhooks"), seg.webhook_id(hook)], rest.NoContent(Nil))
+
+  assert header(with_token, "authorization") == Error(Nil)
+  assert header(interaction, "authorization") == Error(Nil)
+  // No token in the path, so the bot token still goes.
+  assert header(tokenless, "authorization") == Ok("Bot " <> token)
 }
 
 /// HTTP/2 requires lowercase on the wire.
@@ -184,7 +218,11 @@ pub fn content_type_table_test() {
       Ok("application/json"),
     ),
     #(
-      rest.attach(rest.post(messages(), body.NoBody, expect), file("a.txt")),
+      rest.post(
+        messages(),
+        body.Form(payload: [], files: [file("a.txt")]),
+        expect,
+      ),
       Ok(
         "multipart/form-data; boundary=\""
         <> body.boundary_to_string(rest.boundary)
@@ -259,40 +297,47 @@ pub fn literals_are_not_encoded_test() {
   assert rest.request(config(), call).path == "/api/v10/users/@me"
 }
 
-pub fn attach_makes_the_body_multipart_test() {
+pub fn a_form_with_files_is_multipart_test() {
   let call =
     rest.post(
       messages(),
-      body.Form(payload: [#("content", json.string("pong"))], files: []),
+      body.Form(payload: [#("content", json.string("pong"))], files: [
+        file("a.txt"),
+      ]),
       rest.Decoded(id_decoder()),
     )
-    |> rest.attach(file("a.txt"))
 
   let assert Ok(content_type) = header(call, "content-type")
   assert string.starts_with(content_type, "multipart/form-data; boundary=\"")
-  // The fields that were already there travel on as `payload_json`.
+  // The fields travel on as `payload_json`.
   let text = wire_text(call)
   assert string.contains(text, "\"content\":\"pong\"")
   assert string.contains(text, "a.txt")
 }
 
-pub fn attach_appends_test() {
+pub fn files_keep_their_part_order_test() {
   let call =
-    rest.post(messages(), body.NoBody, rest.Decoded(id_decoder()))
-    |> rest.attach(file("first.txt"))
-    |> rest.attach(file("second.txt"))
+    rest.post(
+      messages(),
+      body.Form(payload: [], files: [file("first.txt"), file("second.txt")]),
+      rest.Decoded(id_decoder()),
+    )
 
   let text = wire_text(call)
   let assert Ok(#(before, _)) = string.split_once(text, "second.txt")
   assert string.contains(before, "first.txt")
 }
 
-/// Every body can take a file, including a plain JSON one.
-pub fn attaching_to_a_plain_json_body_works_test() {
-  let call = rest.attach(create_message(), file("a.txt"))
-
-  let assert Ok(content_type) = header(call, "content-type")
-  assert string.starts_with(content_type, "multipart/form-data")
+/// A part is named `files[n]` from its position in the list.
+pub fn a_file_is_named_by_position_test() {
+  let call =
+    rest.post(
+      messages(),
+      body.Form(payload: [#("content", json.string("pong"))], files: [
+        file("a.txt"),
+      ]),
+      rest.Decoded(id_decoder()),
+    )
 
   let text = wire_text(call)
   assert string.contains(text, "a.txt")
@@ -336,7 +381,7 @@ pub fn an_interaction_callback_is_unbound_test() {
       [
         seg.lit("interactions"),
         seg.id(id.from_string("1234567890123456789")),
-        seg.opaque_text("interaction-token"),
+        seg.credential("interaction-token"),
         seg.lit("callback"),
       ],
       body.NoBody,

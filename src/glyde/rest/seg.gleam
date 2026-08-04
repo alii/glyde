@@ -8,7 +8,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import glyde/id.{type Id}
-import glyde/internal/url
+import glyde/internal/percent
 import glyde/rest/route.{type Major, type Route, type Sublimit}
 
 pub opaque type Seg {
@@ -21,13 +21,16 @@ pub opaque type Seg {
   PlainId(String)
   ReactionEmoji(String)
   OpaqueText(String)
+  /// A secret in the path: an interaction token, a webhook token outside a
+  /// `MajorWebhook`. Its presence means no `Authorization` header is sent.
+  Credential(String)
   /// Text out of a caller's value, from `loose`. It keeps its shape in the
   /// template because the bucket depends on it, and is encoded in the path.
   Unknown(String)
 }
 
 pub type Resolved {
-  Resolved(path: String, route: Route)
+  Resolved(path: String, route: Route, in_path_auth: Bool)
 }
 
 /// A literal path segment, not percent-encoded: encoding one would turn
@@ -41,7 +44,7 @@ pub fn lit(text: String) -> Seg {
 /// is percent-encoded in the path, and stays as written in the bucket template
 /// because there is nothing to replace it with. A snowflake is an ordinary id.
 pub fn loose(text: String) -> Seg {
-  case is_snowflake(text) {
+  case id.plausible(text) {
     True -> PlainId(text)
     False -> Unknown(text)
   }
@@ -60,14 +63,14 @@ pub fn guild(guild_id: Id(id.Guild)) -> Seg {
 
 /// A webhook's id and token, one major parameter across two path segments.
 /// One value here, so half of it cannot reach a bucket key.
-pub fn webhook(hook: Id(id.Webhook), token: String) -> List(Seg) {
-  [MajorWebhook(id.to_string(hook), Some(token))]
+pub fn webhook(hook: Id(id.Webhook), token: String) -> Seg {
+  MajorWebhook(id.to_string(hook), Some(token))
 }
 
 /// The tokenless form, `GET /webhooks/{webhook.id}`, which Discord buckets by
 /// the id alone. One path segment, not two.
-pub fn webhook_id(hook: Id(id.Webhook)) -> List(Seg) {
-  [MajorWebhook(id.to_string(hook), None)]
+pub fn webhook_id(hook: Id(id.Webhook)) -> Seg {
+  MajorWebhook(id.to_string(hook), None)
 }
 
 /// A non-major id: a message id, a user id inside a guild route. Erased from
@@ -82,16 +85,24 @@ pub fn reaction(emoji: String) -> Seg {
   ReactionEmoji(emoji)
 }
 
-/// Free text that is neither an id nor a literal: an interaction token, an
-/// invite code. Erased from the template.
+/// Free text that is neither an id nor a literal: an invite code. Erased from
+/// the template.
 pub fn opaque_text(text: String) -> Seg {
   OpaqueText(text)
+}
+
+/// A secret that authenticates the request from inside the path. Same shape as
+/// `opaque_text` in the URL and template, but its presence drops the
+/// `Authorization` header so a 401 names one credential.
+pub fn credential(text: String) -> Seg {
+  Credential(text)
 }
 
 /// Sublimit is left at `NoSublimit`: a path cannot know how old the message it
 /// deletes is. The caller sets that on the route.
 pub fn resolve(method: http.Method, segments: List(Seg)) -> Resolved {
-  let walked = list.fold(segments, Walk([], [], False, route.NoMajor), step)
+  let walked =
+    list.fold(segments, Walk([], [], False, route.NoMajor, False), step)
   Resolved(
     path: join(walked.path),
     route: route.new(
@@ -100,6 +111,7 @@ pub fn resolve(method: http.Method, segments: List(Seg)) -> Resolved {
       walked.major,
       route.NoSublimit,
     ),
+    in_path_auth: walked.credential,
   )
 }
 
@@ -123,7 +135,7 @@ pub fn from_path(
 
   // The walk re-encodes a path the caller already has, so that half is thrown
   // away.
-  let Resolved(path: _, route: read) = resolve(method, classify(segments))
+  let Resolved(route: read, ..) = resolve(method, classify(segments))
   route.with_sublimit(read, sublimit)
 }
 
@@ -134,6 +146,10 @@ type Walk {
     /// Set by a reaction segment. Everything after one leaves the template.
     collapsed: Bool,
     major: Major,
+    /// Set by a `Credential` or a webhook token. `rest.build` reads it to
+    /// drop the `Authorization` header, so a route that carries a path secret
+    /// cannot also send the bot token.
+    credential: Bool,
   )
 }
 
@@ -154,6 +170,7 @@ fn step(walk: Walk, segment: Seg) -> Walk {
     template:,
     collapsed: walk.collapsed || is_reaction(segment),
     major:,
+    credential: walk.credential || carries_credential(segment),
   )
 }
 
@@ -167,14 +184,15 @@ fn path_of(segment: Seg) -> String {
   case segment {
     Literal(text) -> text
     MajorWebhook(value, Some(token)) ->
-      url.percent_encode(value) <> "/" <> url.percent_encode(token)
+      percent.encode(value) <> "/" <> percent.encode(token)
     MajorChannel(value)
     | MajorGuild(value)
     | MajorWebhook(value, None)
     | PlainId(value)
     | ReactionEmoji(value)
     | OpaqueText(value)
-    | Unknown(value) -> url.percent_encode(value)
+    | Credential(value)
+    | Unknown(value) -> percent.encode(value)
   }
 }
 
@@ -188,7 +206,7 @@ fn template_of(segment: Seg) -> String {
       route.webhook_placeholder <> "/" <> route.webhook_token_placeholder
     PlainId(_) -> route.id_placeholder
     ReactionEmoji(_) -> route.reaction_placeholder
-    OpaqueText(_) -> route.opaque_placeholder
+    OpaqueText(_) | Credential(_) -> route.opaque_placeholder
     Unknown(text) -> text
   }
 }
@@ -199,13 +217,25 @@ fn major_of(segment: Seg) -> Major {
     MajorGuild(value) -> route.GuildMajor(value)
     MajorWebhook(value, token) ->
       route.WebhookMajor(value, route.webhook_token(token))
-    _ -> route.NoMajor
+    Literal(_)
+    | PlainId(_)
+    | ReactionEmoji(_)
+    | OpaqueText(_)
+    | Credential(_)
+    | Unknown(_) -> route.NoMajor
   }
 }
 
 fn is_reaction(segment: Seg) -> Bool {
   case segment {
     ReactionEmoji(_) -> True
+    _ -> False
+  }
+}
+
+fn carries_credential(segment: Seg) -> Bool {
+  case segment {
+    Credential(_) | MajorWebhook(_, Some(_)) -> True
     _ -> False
   }
 }
@@ -228,7 +258,7 @@ fn classify(segments: List(String)) -> List(Seg) {
     ["users", ..rest] -> [Literal("users"), ..list.map(rest, loose)]
 
     ["webhooks", value, token, ..rest] ->
-      case is_snowflake(value) {
+      case id.plausible(value) {
         True -> [
           Literal("webhooks"),
           MajorWebhook(value, Some(token)),
@@ -245,7 +275,7 @@ fn classify(segments: List(String)) -> List(Seg) {
     ["interactions", value, token, ..rest] -> [
       Literal("interactions"),
       loose(value),
-      OpaqueText(token),
+      Credential(token),
       ..classify(rest)
     ]
 
@@ -268,7 +298,7 @@ fn major_pair(
   value: String,
   rest: List(String),
 ) -> List(Seg) {
-  case is_snowflake(value) {
+  case id.plausible(value) {
     True -> [Literal(literal), major(value), ..classify(rest)]
     False -> [Literal(literal), ..classify([value, ..rest])]
   }
@@ -279,19 +309,4 @@ fn before_query(path: String) -> String {
     Ok(#(before, _)) -> before
     Error(_) -> path
   }
-}
-
-/// Discord's ids run to 17, 18 or 19 digits.
-fn is_snowflake(text: String) -> Bool {
-  let length = string.length(text)
-  length >= 17 && length <= 19 && all_digits(string.to_graphemes(text))
-}
-
-fn all_digits(graphemes: List(String)) -> Bool {
-  list.all(graphemes, fn(grapheme) {
-    case grapheme {
-      "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" -> True
-      _ -> False
-    }
-  })
 }

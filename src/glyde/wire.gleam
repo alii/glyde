@@ -5,51 +5,25 @@
 //// needs the same handling for all three.
 
 import gleam/dict.{type Dict}
-import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode.{type Decoder}
 import gleam/float
 import gleam/int
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import glyde/field
+import glyde/field.{type Field, Absent, Null, Present}
 
-/// Absent, null, or set. On a PATCH those are different instructions: absent
-/// leaves the field alone, null clears it.
-pub type Field(a) =
-  field.Field(a)
-
-pub fn absent() -> Field(a) {
-  field.Absent
-}
-
-pub fn null() -> Field(a) {
-  field.Null
-}
-
-pub fn present(value: a) -> Field(a) {
-  field.Present(value)
-}
-
-/// `None` becomes absent. Use `nullable` when it should clear the field.
+/// `None` becomes absent. Use `field.or_null` when it should clear the field.
 pub fn opt(value: Option(a)) -> Field(a) {
   field.from_option(value)
-}
-
-/// `None` becomes null, for a PATCH that clears the field.
-pub fn nullable(value: Option(a)) -> Field(a) {
-  case value {
-    Some(v) -> field.Present(v)
-    None -> field.Null
-  }
 }
 
 /// Empty becomes absent: Discord reads `[]` as "clear this" on several
 /// endpoints.
 pub fn opt_list(values: List(a)) -> Field(List(a)) {
   case values {
-    [] -> field.Absent
-    _ -> field.Present(values)
+    [] -> Absent
+    _ -> Present(values)
   }
 }
 
@@ -69,9 +43,9 @@ pub fn entries(entries: List(#(String, Field(Json)))) -> List(#(String, Json)) {
 fn resolve(entry: #(String, Field(Json))) -> Result(#(String, Json), Nil) {
   let #(key, value) = entry
   case value {
-    field.Absent -> Error(Nil)
-    field.Null -> Ok(#(key, json.null()))
-    field.Present(encoded) -> Ok(#(key, encoded))
+    Absent -> Error(Nil)
+    Null -> Ok(#(key, json.null()))
+    Present(encoded) -> Ok(#(key, encoded))
   }
 }
 
@@ -217,6 +191,73 @@ pub fn list_field(
   defaulted_field(name, decode.list(inner), [], next)
 }
 
+/// A closed enum Discord may extend. `from_int` returns `None` for a value
+/// this build has no name for, and the field yields `None` for absent, null
+/// and unmodelled alike, so a new enum value cannot sink the payload.
+pub fn known_field(
+  name: String,
+  from_int: fn(Int) -> Option(a),
+  next: fn(Option(a)) -> Decoder(b),
+) -> Decoder(b) {
+  defaulted_field(name, integer() |> decode.map(from_int), None, next)
+}
+
+/// A required discriminator: the key must be present, and a value this build
+/// has no name for FAILS the decode. For fields Discord always sends, so the
+/// unmodelled case is a glyde bug that reaches `on_status` as `Undecodable`
+/// rather than an `Option` every caller unwraps. `zero` is the error's
+/// placeholder, never returned.
+pub fn type_field(
+  name: String,
+  from_int: fn(Int) -> Option(a),
+  zero: a,
+  expected: String,
+  next: fn(a) -> Decoder(b),
+) -> Decoder(b) {
+  decode.field(name, strict(from_int, zero, expected), next)
+}
+
+/// `type_field` with a default for absent or null. An unmodelled value still
+/// fails the decode.
+pub fn type_or(
+  name: String,
+  from_int: fn(Int) -> Option(a),
+  default: a,
+  expected: String,
+  next: fn(a) -> Decoder(b),
+) -> Decoder(b) {
+  defaulted_field(name, strict(from_int, default, expected), default, next)
+}
+
+/// The inner half of `type_field`, so a caller who cannot supply a `zero` can
+/// build the field decoder itself.
+pub fn strict(
+  from_int: fn(Int) -> Option(a),
+  zero: a,
+  expected: String,
+) -> Decoder(a) {
+  use value <- decode.then(integer())
+  case from_int(value) {
+    Some(known) -> decode.success(known)
+    None -> decode.failure(zero, expected)
+  }
+}
+
+/// A list where each item may be one this build cannot model. Unmodelled
+/// items are dropped, so one new discriminator cannot sink the whole list.
+pub fn known_list_field(
+  name: String,
+  inner: Decoder(Option(a)),
+  next: fn(List(a)) -> Decoder(b),
+) -> Decoder(b) {
+  defaulted_field(
+    name,
+    decode.list(inner) |> decode.map(option.values),
+    [],
+    next,
+  )
+}
+
 /// Missing or null gives an empty dict, so there is no `Option` to unwrap
 /// before a `dict.get`.
 pub fn dict_field(
@@ -247,36 +288,24 @@ pub fn tri_field(
 ) -> Decoder(b) {
   decode.optional_field(
     name,
-    field.Absent,
-    decode.optional(inner) |> decode.map(to_field),
+    Absent,
+    decode.optional(inner) |> decode.map(field.or_null),
     next,
   )
-}
-
-fn to_field(value: Option(a)) -> Field(a) {
-  case value {
-    Some(v) -> field.Present(v)
-    None -> field.Null
-  }
 }
 
 /// Whether a key is there at all. Discord marks some booleans,
 /// `RoleTags.premium_subscriber` among them, by writing a null.
 pub fn present_field(name: String, next: fn(Bool) -> Decoder(a)) -> Decoder(a) {
-  decode.optional_field(
-    name,
-    False,
-    decode.optional(decode.dynamic) |> decode.map(fn(_) { True }),
-    next,
-  )
+  decode.optional_field(name, False, decode.success(True), next)
 }
 
 /// The encoding side of `present_field`: true writes a null, false leaves the
 /// key out.
 pub fn null_flag(value: Bool) -> Field(Json) {
   case value {
-    True -> field.Null
-    False -> field.Absent
+    True -> Null
+    False -> Absent
   }
 }
 
@@ -285,8 +314,8 @@ pub fn null_flag(value: Bool) -> Field(Json) {
 /// `null` as an instruction rather than a default.
 pub fn flag(value: Bool) -> Field(Json) {
   case value {
-    True -> field.Present(json.bool(True))
-    False -> field.Absent
+    True -> Present(json.bool(True))
+    False -> Absent
   }
 }
 
@@ -299,6 +328,17 @@ pub fn int_field(
   defaulted_field(name, integer(), default, next)
 }
 
+/// An int field mapped through a `from_int`, so the raw number never sits in a
+/// local waiting to be converted at the bottom of the decoder. Absent or null
+/// is 0, which every one of Discord's numeric enum tables reads as its default.
+pub fn enum_field(
+  name: String,
+  from_int: fn(Int) -> a,
+  next: fn(a) -> Decoder(b),
+) -> Decoder(b) {
+  int_field(name, 0, fn(value) { next(from_int(value)) })
+}
+
 /// A string that may be missing or null, with a default.
 pub fn string_field(
   name: String,
@@ -306,57 +346,4 @@ pub fn string_field(
   next: fn(String) -> Decoder(a),
 ) -> Decoder(a) {
   defaulted_field(name, decode.string, default, next)
-}
-
-/// Keep the raw payload beside the decoded value, so a field glyde does not
-/// model is one `decode.at` away.
-pub fn raw(next: fn(Dynamic) -> Decoder(a)) -> Decoder(a) {
-  decode.then(decode.dynamic, next)
-}
-
-/// Decode an enum Discord may extend, keeping the raw value for one glyde has
-/// not seen. Failing would turn a new channel type into a dropped event.
-pub fn enum_with_fallback(
-  known: fn(Int) -> Option(a),
-  unknown: fn(Int) -> a,
-) -> Decoder(a) {
-  integer()
-  |> decode.map(fn(value) {
-    case known(value) {
-      Some(variant) -> variant
-      None -> unknown(value)
-    }
-  })
-}
-
-/// The string form of the same thing, for enums Discord keys by name.
-pub fn string_enum_with_fallback(
-  known: fn(String) -> Option(a),
-  unknown: fn(String) -> a,
-) -> Decoder(a) {
-  decode.string
-  |> decode.map(fn(value) {
-    case known(value) {
-      Some(variant) -> variant
-      None -> unknown(value)
-    }
-  })
-}
-
-/// For flags Discord sends as a JSON number. Permission bitfields arrive as
-/// strings and belong in `glyde/permissions`.
-pub fn has_bit(flags: Int, bit: Int) -> Bool {
-  int.bitwise_and(flags, bit) != 0
-}
-
-pub fn bits_to_list(flags: Int, table: List(#(a, Int))) -> List(a) {
-  table
-  |> list.filter(fn(entry) { has_bit(flags, entry.1) })
-  |> list.map(fn(entry) { entry.0 })
-}
-
-pub fn list_to_bits(values: List(a), table: List(#(a, Int))) -> Int {
-  table
-  |> list.filter(fn(entry) { list.contains(values, entry.0) })
-  |> list.fold(0, fn(acc, entry) { int.bitwise_or(acc, entry.1) })
 }

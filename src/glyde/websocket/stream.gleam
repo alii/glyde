@@ -8,7 +8,7 @@ import glyde/websocket/frame
 
 /// Bytes waiting to be read, and the message being put back together.
 /// `max_bytes` lives in here so it cannot drift between calls.
-pub type Stream {
+pub opaque type Stream {
   Stream(buffer: BitArray, assembly: frame.Assembly, max_bytes: Int)
 }
 
@@ -70,9 +70,5 @@ pub fn next(stream: Stream) -> Next {
 
 /// Bytes held, unparsed plus half-assembled, which is what `max_bytes` bounds.
 pub fn buffered(stream: Stream) -> Int {
-  let held = case stream.assembly {
-    frame.Idle -> 0
-    frame.Fragmented(payload:, ..) -> bit_array.byte_size(payload)
-  }
-  bit_array.byte_size(stream.buffer) + held
+  bit_array.byte_size(stream.buffer) + frame.assembly_bytes(stream.assembly)
 }

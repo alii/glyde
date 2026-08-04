@@ -1,6 +1,7 @@
 //// The built-in adapter, at what needs no peer: a dial that is refused before
 //// a packet goes out still has to honour the `transport.Socket` contract.
 
+import gleam/option.{Some}
 import glyde/internal/timing
 import glyde/transport
 import glyde/transport/erlang as erlang_transport
@@ -10,7 +11,8 @@ import glyde/transport/erlang as erlang_transport
 fn finished() -> transport.Socket {
   let socket = erlang_transport.default().open("ws://gateway.discord.gg/")
   let #(socket, events) = socket.turn(0)
-  let assert [transport.Failed(_), transport.Closed(1006, "")] = events
+  let assert [transport.Closed(1006, "", Some(transport.TransportFailed(_)))] =
+    events
   socket
 }
 

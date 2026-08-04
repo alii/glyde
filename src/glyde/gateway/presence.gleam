@@ -7,6 +7,7 @@
 
 import gleam/json.{type Json}
 import gleam/option.{type Option, None}
+import glyde/field.{Absent, Present}
 import glyde/wire
 
 pub type Presence {
@@ -68,23 +69,18 @@ fn idle_since(status: Status) -> Option(Int) {
 
 fn activity_to_json(activity: Activity) -> Json {
   let #(kind, name, url, state) = case activity {
-    Playing(name:) -> #(0, name, wire.absent(), wire.absent())
-    Streaming(name:, url:) -> #(1, name, wire.present(url), wire.absent())
-    Listening(name:) -> #(2, name, wire.absent(), wire.absent())
-    Watching(name:) -> #(3, name, wire.absent(), wire.absent())
-    Competing(name:) -> #(5, name, wire.absent(), wire.absent())
+    Playing(name:) -> #(0, name, Absent, Absent)
+    Streaming(name:, url:) -> #(1, name, Present(url), Absent)
+    Listening(name:) -> #(2, name, Absent, Absent)
+    Watching(name:) -> #(3, name, Absent, Absent)
+    Competing(name:) -> #(5, name, Absent, Absent)
     // Type 4 needs a name on the wire and never shows it; the visible text is
     // `state`. "Custom Status" is what Discord's own client sends.
-    CustomStatus(text:) -> #(
-      4,
-      "Custom Status",
-      wire.absent(),
-      wire.present(text),
-    )
+    CustomStatus(text:) -> #(4, "Custom Status", Absent, Present(text))
   }
   wire.object([
-    #("name", wire.present(json.string(name))),
-    #("type", wire.present(json.int(kind))),
+    #("name", Present(json.string(name))),
+    #("type", Present(json.int(kind))),
     // Omitted, not null: Discord rejects a null `url` on the other types.
     #("url", wire.put(url, json.string)),
     #("state", wire.put(state, json.string)),

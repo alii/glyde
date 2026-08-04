@@ -75,14 +75,14 @@ fn resolve_table() -> List(#(List(seg.Seg), String, String, route.Major)) {
       route.NoMajor,
     ),
     #(
-      [seg.lit("webhooks"), ..seg.webhook(webhook_id(), "tok-AAA")],
+      [seg.lit("webhooks"), seg.webhook(webhook_id(), "tok-AAA")],
       "/webhooks/" <> hook <> "/tok-AAA",
       "/webhooks/{webhook.id}/{webhook.token}",
       route.WebhookMajor(hook, route.webhook_token(Some("tok-AAA"))),
     ),
     // The tokenless form is one segment, not a token left empty.
     #(
-      [seg.lit("webhooks"), ..seg.webhook_id(webhook_id())],
+      [seg.lit("webhooks"), seg.webhook_id(webhook_id())],
       "/webhooks/" <> hook,
       "/webhooks/{webhook.id}",
       route.WebhookMajor(hook, route.webhook_token(None)),
@@ -297,16 +297,14 @@ pub fn a_parsed_route_matches_the_built_one_test() {
       seg.id(message_id()),
       seg.lit("reactions"),
     ]),
-    #(http.Post, [seg.lit("webhooks"), ..seg.webhook(webhook_id(), "tok-AAA")]),
-    #(http.Get, [seg.lit("webhooks"), ..seg.webhook_id(webhook_id())]),
-    #(
-      http.Patch,
-      list.flatten([
-        [seg.lit("webhooks")],
-        seg.webhook(webhook_id(), "tok-AAA"),
-        [seg.lit("messages"), seg.lit("@original")],
-      ]),
-    ),
+    #(http.Post, [seg.lit("webhooks"), seg.webhook(webhook_id(), "tok-AAA")]),
+    #(http.Get, [seg.lit("webhooks"), seg.webhook_id(webhook_id())]),
+    #(http.Patch, [
+      seg.lit("webhooks"),
+      seg.webhook(webhook_id(), "tok-AAA"),
+      seg.lit("messages"),
+      seg.lit("@original"),
+    ]),
     // The guild is the major parameter here even though the application id
     // comes first, so a parser that only looks at the head disagrees.
     #(http.Post, [

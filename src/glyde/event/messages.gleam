@@ -132,15 +132,16 @@ pub fn reaction_remove_emoji_decoder(
 }
 
 /// The reaction `type`, which an older payload omits. Only absence defaults:
-/// a `type` that is present and unreadable is a burst reaction we would
-/// otherwise hand to a host as a normal one.
+/// a `type` that is present and unmodelled fails the decode, so a burst
+/// reaction is never handed to a host as a normal one.
 fn reaction_type_field(
   next: fn(ReactionType) -> Decoder(final),
 ) -> Decoder(final) {
-  decode.optional_field(
+  wire.type_or(
     "type",
+    message.reaction_type_from_int,
     message.NormalReaction,
-    message.reaction_type_decoder(),
+    "ReactionType",
     next,
   )
 }

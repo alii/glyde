@@ -6,8 +6,10 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import glyde/gateway/frame
+import glyde/gateway/identify
 import glyde/gateway/presence
 import glyde/intents
+import glyde/token
 
 /// Every inbound frame as one comparable line. `Dispatch` holds a `Dynamic` no
 /// literal can be written for, so it is tested separately.
@@ -220,24 +222,23 @@ pub fn heartbeat_interval_accepts_a_whole_float_test() {
     == frame.Undecodable(frame.HelloIntervalUnreadable)
 }
 
-fn identity() -> frame.Identity {
-  frame.Identity(
-    token: "a.b.c",
+fn identity() -> identify.Identity {
+  identify.Identity(
+    token: token.new("a.b.c"),
     intents: intents.new([intents.Guilds, intents.GuildMessages]),
-    properties: frame.Properties(
+    properties: identify.Properties(
       os: "erlang",
       browser: "glyde",
       device: "glyde",
     ),
-    compress: False,
-    large_threshold: frame.large_threshold(50),
-    shard: frame.unsharded(),
+    large_threshold: identify.large_threshold(50),
+    shard: identify.unsharded(),
     presence: None,
   )
 }
 
 pub fn identify_test() {
-  assert frame.identify(identity()).text
+  assert frame.outbound_text(identify.identify(identity()))
     == "{\"op\":2,\"d\":{\"token\":\"a.b.c\",\"properties\":{\"os\":\"erlang\","
     <> "\"browser\":\"glyde\",\"device\":\"glyde\"},\"compress\":false,"
     <> "\"large_threshold\":50,\"shard\":[0,1],\"intents\":513}}"
@@ -248,7 +249,9 @@ pub fn identify_carries_a_presence_test() {
   let shown =
     presence.Presence(status: presence.Idle(None), activities: [], afk: True)
   let payload =
-    frame.identify(frame.Identity(..identity(), presence: Some(shown))).text
+    frame.outbound_text(identify.identify(
+      identify.Identity(..identity(), presence: Some(shown)),
+    ))
   assert string.contains(
     payload,
     "\"presence\":{\"since\":null,\"activities\":[],\"status\":\"idle\","
@@ -258,7 +261,7 @@ pub fn identify_carries_a_presence_test() {
 
 /// Discord reads `"presence": null` as malformed and answers with close 4002.
 pub fn identify_omits_an_unset_presence_test() {
-  let payload = frame.identify(identity()).text
+  let payload = frame.outbound_text(identify.identify(identity()))
   assert string.contains(payload, "presence") == False
   assert string.contains(payload, "null") == False
 }
@@ -267,13 +270,15 @@ pub fn identify_omits_an_unset_presence_test() {
 /// gateway refuses.
 pub fn identify_sends_zero_intents_test() {
   let payload =
-    frame.identify(frame.Identity(..identity(), intents: intents.none())).text
+    frame.outbound_text(identify.identify(
+      identify.Identity(..identity(), intents: intents.none()),
+    ))
   assert string.contains(payload, "\"intents\":0")
 }
 
 /// The `$os` spelling is deprecated, and all three properties are required.
 pub fn identify_properties_are_unprefixed_test() {
-  let payload = frame.identify(identity()).text
+  let payload = frame.outbound_text(identify.identify(identity()))
   assert string.contains(payload, "$") == False
   assert string.contains(
     payload,
@@ -285,25 +290,29 @@ pub fn identify_properties_are_unprefixed_test() {
 /// Two ints in an array, index first. The wrong shape, or the two the wrong
 /// way round, is close 4010, which is fatal.
 pub fn identify_shard_is_a_two_element_array_test() {
-  let assert Ok(fleet) = frame.sharding(index: 2, count: 4)
-  let payload = frame.identify(frame.Identity(..identity(), shard: fleet)).text
+  let assert Ok(fleet) = identify.sharding(index: 2, count: 4)
+  let payload =
+    frame.outbound_text(identify.identify(
+      identify.Identity(..identity(), shard: fleet),
+    ))
   assert string.contains(payload, "\"shard\":[2,4]")
 }
 
 /// A fleet the gateway would answer with close 4010 cannot be built, so no
 /// IDENTIFY can carry one.
 pub fn a_shard_outside_its_fleet_cannot_be_built_test() {
-  let assert Ok(_) = frame.sharding(index: 0, count: 1)
-  let assert Ok(_) = frame.sharding(index: 15, count: 16)
+  let assert Ok(_) = identify.sharding(index: 0, count: 1)
+  let assert Ok(_) = identify.sharding(index: 15, count: 16)
 
-  assert frame.sharding(index: 16, count: 16)
-    == Error(frame.IndexOutOfRange(index: 16, count: 16))
-  assert frame.sharding(index: -1, count: 16)
-    == Error(frame.IndexOutOfRange(index: -1, count: 16))
-  assert frame.sharding(index: 0, count: 0) == Error(frame.EmptyFleet(count: 0))
+  assert identify.sharding(index: 16, count: 16)
+    == Error(identify.IndexOutOfRange(index: 16, count: 16))
+  assert identify.sharding(index: -1, count: 16)
+    == Error(identify.IndexOutOfRange(index: -1, count: 16))
+  assert identify.sharding(index: 0, count: 0)
+    == Error(identify.EmptyFleet(count: 0))
 
-  assert frame.shard_index(frame.unsharded()) == 0
-  assert frame.shard_count(frame.unsharded()) == 1
+  assert identify.shard_index(identify.unsharded()) == 0
+  assert identify.shard_count(identify.unsharded()) == 1
 }
 
 /// Discord's legal range is 50 to 250, and outside it IDENTIFY is refused.
@@ -313,11 +322,13 @@ pub fn large_threshold_is_clamped_test() {
   let table = [#(0, 50), #(49, 50), #(50, 50), #(250, 250), #(251, 250)]
   list.each(table, fn(row) {
     let #(configured, expected) = row
-    let threshold = frame.large_threshold(configured)
-    assert frame.large_threshold_value(threshold) == expected
+    let threshold = identify.large_threshold(configured)
+    assert identify.large_threshold_value(threshold) == expected
 
     let payload =
-      frame.identify(frame.Identity(..identity(), large_threshold: threshold)).text
+      frame.outbound_text(identify.identify(
+        identify.Identity(..identity(), large_threshold: threshold),
+      ))
     assert string.contains(
       payload,
       "\"large_threshold\":" <> int.to_string(expected),
@@ -328,7 +339,12 @@ pub fn large_threshold_is_clamped_test() {
 /// The field is `seq`: sending `s` reads as a missing sequence and comes back
 /// as close 4007.
 pub fn resume_test() {
-  let payload = frame.resume(token: "a.b.c", session_id: "abc", seq: 1337).text
+  let payload =
+    frame.outbound_text(frame.resume(
+      token: token.new("a.b.c"),
+      session_id: "abc",
+      seq: 1337,
+    ))
   assert payload
     == "{\"op\":6,\"d\":{\"token\":\"a.b.c\",\"session_id\":\"abc\","
     <> "\"seq\":1337}}"
@@ -344,7 +360,7 @@ pub fn heartbeat_test() {
   ]
   list.each(table, fn(row) {
     let #(seq, expected) = row
-    assert frame.heartbeat(seq).text == expected
+    assert frame.outbound_text(frame.heartbeat(seq)) == expected
   })
 }
 
@@ -368,16 +384,16 @@ fn inner_keys_of(payload: String) -> List(String) {
 /// has to read the opcode back out of the text.
 pub fn outbound_frames_carry_only_op_and_d_test() {
   let payloads = [
-    frame.identify(identity()),
-    frame.resume(token: "a.b.c", session_id: "abc", seq: 1337),
+    identify.identify(identity()),
+    frame.resume(token: token.new("a.b.c"), session_id: "abc", seq: 1337),
     frame.heartbeat(None),
     frame.heartbeat(Some(7)),
   ]
   list.each(payloads, fn(payload) {
-    assert keys_of(payload.text) == ["d", "op"]
+    assert keys_of(frame.outbound_text(payload)) == ["d", "op"]
     let assert Ok(written) =
-      json.parse(payload.text, decode.at(["op"], decode.int))
-    assert written == frame.opcode_to_int(payload.op)
+      json.parse(frame.outbound_text(payload), decode.at(["op"], decode.int))
+    assert written == frame.send_op_to_int(frame.outbound_op(payload))
   })
 }
 

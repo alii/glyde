@@ -18,6 +18,8 @@ import gleam/dynamic/decode.{type Decoder}
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import glyde/attachment.{type Dimensions, type Placeholder}
+import glyde/field.{Present}
 import glyde/flags.{type Flags}
 import glyde/internal/utf16
 import glyde/wire
@@ -53,9 +55,9 @@ pub type Embed {
   )
 }
 
-/// Discord's documented embed types, plus the tail for the ones it ships
-/// without documenting. Only `Rich` is ever sent by a bot; the rest are what
-/// the client made of a link.
+/// Discord's documented embed types. Only `Rich` is ever sent by a bot; the
+/// rest are what the client made of a link. An open set on the wire, so a
+/// value this build has no name for decodes as `None`.
 pub type EmbedType {
   Rich
   Image
@@ -65,10 +67,9 @@ pub type EmbedType {
   Link
   PollResult
   AutoModerationMessage
-  UnknownEmbedType(String)
 }
 
-fn known_embed_type(value: String) -> Option(EmbedType) {
+pub fn embed_type_from_string(value: String) -> Option(EmbedType) {
   case value {
     "rich" -> Some(Rich)
     "image" -> Some(Image)
@@ -82,10 +83,6 @@ fn known_embed_type(value: String) -> Option(EmbedType) {
   }
 }
 
-pub fn embed_type_from_string(value: String) -> EmbedType {
-  known_embed_type(value) |> option.unwrap(UnknownEmbedType(value))
-}
-
 pub fn embed_type_to_string(value: EmbedType) -> String {
   case value {
     Rich -> "rich"
@@ -96,12 +93,11 @@ pub fn embed_type_to_string(value: EmbedType) -> String {
     Link -> "link"
     PollResult -> "poll_result"
     AutoModerationMessage -> "auto_moderation_message"
-    UnknownEmbedType(other) -> other
   }
 }
 
-pub fn embed_type_decoder() -> Decoder(EmbedType) {
-  wire.string_enum_with_fallback(known_embed_type, UnknownEmbedType)
+pub fn embed_type_decoder() -> Decoder(Option(EmbedType)) {
+  decode.string |> decode.map(embed_type_from_string)
 }
 
 pub type EmbedFlags =
@@ -139,12 +135,12 @@ pub type EmbedMedia {
   EmbedMedia(
     url: Option(String),
     proxy_url: Option(String),
-    height: Option(Int),
-    width: Option(Int),
+    /// Discord sends both sides or neither, so one value carries both.
+    dimensions: Option(Dimensions),
     content_type: Option(String),
-    /// A thumbhash: a blurred preview to paint while the image loads.
-    placeholder: Option(String),
-    placeholder_version: Option(Int),
+    /// A thumbhash: a blurred preview to paint while the image loads. The
+    /// version only says how the hash is encoded, so one value carries both.
+    placeholder: Option(Placeholder),
     /// Alt text.
     description: Option(String),
     flags: EmbedMediaFlags,
@@ -246,11 +242,9 @@ fn media_url(url: String) -> EmbedMedia {
   EmbedMedia(
     url: Some(url),
     proxy_url: None,
-    height: None,
-    width: None,
+    dimensions: None,
     content_type: None,
     placeholder: None,
-    placeholder_version: None,
     description: None,
     flags: flags.none,
   )
@@ -348,14 +342,14 @@ fn media_to_json(media: EmbedMedia) -> Json {
 
 fn footer_to_json(footer: EmbedFooter) -> Json {
   wire.object([
-    #("text", wire.present(json.string(footer.text))),
+    #("text", Present(json.string(footer.text))),
     #("icon_url", wire.put(wire.opt(footer.icon_url), json.string)),
   ])
 }
 
 fn author_to_json(author: EmbedAuthor) -> Json {
   wire.object([
-    #("name", wire.present(json.string(author.name))),
+    #("name", Present(json.string(author.name))),
     #("url", wire.put(wire.opt(author.url), json.string)),
     #("icon_url", wire.put(wire.opt(author.icon_url), json.string)),
   ])
@@ -371,7 +365,7 @@ fn field_to_json(field: EmbedField) -> Json {
 
 pub fn decoder() -> Decoder(Embed) {
   use title <- wire.opt_field("title", decode.string)
-  use type_ <- wire.opt_field("type", embed_type_decoder())
+  use type_ <- wire.defaulted_field("type", embed_type_decoder(), None)
   use description <- wire.opt_field("description", decode.string)
   use url <- wire.opt_field("url", decode.string)
   use timestamp <- wire.opt_field("timestamp", decode.string)
@@ -383,7 +377,7 @@ pub fn decoder() -> Decoder(Embed) {
   use provider <- wire.opt_field("provider", provider_decoder())
   use author <- wire.opt_field("author", author_decoder())
   use fields <- wire.list_field("fields", field_decoder())
-  use flag_bits <- wire.int_field("flags", 0)
+  use flags <- wire.enum_field("flags", flags.from_int)
   decode.success(Embed(
     title:,
     type_:,
@@ -398,7 +392,7 @@ pub fn decoder() -> Decoder(Embed) {
     provider:,
     author:,
     fields:,
-    flags: flags.from_int(flag_bits),
+    flags:,
   ))
 }
 
@@ -412,26 +406,19 @@ pub fn footer_decoder() -> Decoder(EmbedFooter) {
 pub fn media_decoder() -> Decoder(EmbedMedia) {
   use url <- wire.opt_field("url", decode.string)
   use proxy_url <- wire.opt_field("proxy_url", decode.string)
-  use height <- wire.opt_field("height", wire.integer())
-  use width <- wire.opt_field("width", wire.integer())
+  use dimensions <- attachment.dimensions_field
   use content_type <- wire.opt_field("content_type", decode.string)
-  use placeholder <- wire.opt_field("placeholder", decode.string)
-  use placeholder_version <- wire.opt_field(
-    "placeholder_version",
-    wire.integer(),
-  )
+  use placeholder <- attachment.placeholder_field
   use description <- wire.opt_field("description", decode.string)
-  use flag_bits <- wire.int_field("flags", 0)
+  use flags <- wire.enum_field("flags", flags.from_int)
   decode.success(EmbedMedia(
     url:,
     proxy_url:,
-    height:,
-    width:,
+    dimensions:,
     content_type:,
     placeholder:,
-    placeholder_version:,
     description:,
-    flags: flags.from_int(flag_bits),
+    flags:,
   ))
 }
 

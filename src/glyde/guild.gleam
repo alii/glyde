@@ -9,7 +9,7 @@
 //// GUILD_CREATE and GUILD_DELETE read `unavailable` by opposite rules.
 
 import gleam/dynamic/decode.{type Decoder}
-import gleam/json.{type Json}
+import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import glyde/channel
@@ -43,16 +43,16 @@ pub type Guild {
     afk_timeout: Int,
     widget_enabled: Option(Bool),
     widget_channel_id: Option(id.ChannelId),
-    verification_level: VerificationLevel,
-    default_message_notifications: MessageNotificationLevel,
-    explicit_content_filter: ExplicitContentFilterLevel,
+    verification_level: Option(VerificationLevel),
+    default_message_notifications: Option(MessageNotificationLevel),
+    explicit_content_filter: Option(ExplicitContentFilterLevel),
     roles: List(role.Role),
     /// GUILD_EMOJIS_UPDATE sends a full replacement array, never a delta.
     emojis: List(emoji.GuildEmoji),
     /// An open set of strings, so not an enum. Use `has_feature(g.features,
     /// …)`.
     features: List(String),
-    mfa_level: MfaLevel,
+    mfa_level: Option(MfaLevel),
     /// Set when a bot created the guild.
     application_id: Option(id.ApplicationId),
     system_channel_id: Option(id.ChannelId),
@@ -64,7 +64,7 @@ pub type Guild {
     vanity_url_code: Option(String),
     description: Option(String),
     banner: Option(String),
-    premium_tier: PremiumTier,
+    premium_tier: Option(PremiumTier),
     premium_subscription_count: Option(Int),
     preferred_locale: String,
     public_updates_channel_id: Option(id.ChannelId),
@@ -73,7 +73,7 @@ pub type Guild {
     /// Only when the request asked for `with_counts`, which answers with both
     /// or neither.
     counts: Option(ApproximateCounts),
-    nsfw_level: GuildNsfwLevel,
+    nsfw_level: Option(GuildNsfwLevel),
     premium_progress_bar_enabled: Bool,
     safety_alerts_channel_id: Option(id.ChannelId),
     /// Everything GUILD_CREATE adds, all of it or none of it. `None` on a
@@ -125,7 +125,7 @@ pub type UserGuild {
     banner: Option(String),
     owner: Bool,
     /// Guild-wide: no channel overwrites folded in.
-    permissions: Option(permissions.Permissions),
+    permissions: Option(permissions.Effective),
     /// An open set of strings, so not an enum.
     features: List(String),
     /// Only when the request asked for `with_counts`, which answers with both
@@ -138,32 +138,31 @@ pub type Ban {
   Ban(reason: Option(String), user: user.User)
 }
 
+// The six enum fields below are open sets on the wire. A value this build has
+// no name for decodes as `None`, so a new level cannot sink a GUILD_CREATE.
+
 pub type VerificationLevel {
   NoVerification
   LowVerification
   MediumVerification
   HighVerification
   VeryHighVerification
-  UnknownVerificationLevel(Int)
 }
 
 pub type MessageNotificationLevel {
   AllMessages
   OnlyMentions
-  UnknownMessageNotificationLevel(Int)
 }
 
 pub type ExplicitContentFilterLevel {
   FilterDisabled
   FilterMembersWithoutRoles
   FilterAllMembers
-  UnknownExplicitContentFilterLevel(Int)
 }
 
 pub type MfaLevel {
   NoMfa
   ElevatedMfa
-  UnknownMfaLevel(Int)
 }
 
 pub type GuildNsfwLevel {
@@ -171,7 +170,6 @@ pub type GuildNsfwLevel {
   ExplicitNsfwLevel
   SafeNsfwLevel
   AgeRestrictedNsfwLevel
-  UnknownNsfwLevel(Int)
 }
 
 pub type PremiumTier {
@@ -179,7 +177,6 @@ pub type PremiumTier {
   Tier1
   Tier2
   Tier3
-  UnknownPremiumTier(Int)
 }
 
 pub type SystemChannelFlags =
@@ -212,10 +209,6 @@ pub fn has_flag(bits: SystemChannelFlags, flag: SystemChannelFlag) -> Bool {
   flags.has_bit(bits, system_channel_flag_bit(flag))
 }
 
-pub fn has_system_channel_flag(guild: Guild, flag: SystemChannelFlag) -> Bool {
-  has_flag(guild.system_channel_flags, flag)
-}
-
 // The features a bot commonly branches on. The set is open, so compare against
 // your own string for anything not here.
 
@@ -241,14 +234,14 @@ pub fn has_feature(features: List(String), feature: String) -> Bool {
   list.contains(features, feature)
 }
 
-pub fn verification_level_from_int(value: Int) -> VerificationLevel {
+pub fn verification_level_from_int(value: Int) -> Option(VerificationLevel) {
   case value {
-    0 -> NoVerification
-    1 -> LowVerification
-    2 -> MediumVerification
-    3 -> HighVerification
-    4 -> VeryHighVerification
-    other -> UnknownVerificationLevel(other)
+    0 -> Some(NoVerification)
+    1 -> Some(LowVerification)
+    2 -> Some(MediumVerification)
+    3 -> Some(HighVerification)
+    4 -> Some(VeryHighVerification)
+    _ -> None
   }
 }
 
@@ -259,21 +252,16 @@ pub fn verification_level_to_int(value: VerificationLevel) -> Int {
     MediumVerification -> 2
     HighVerification -> 3
     VeryHighVerification -> 4
-    UnknownVerificationLevel(other) -> other
   }
-}
-
-pub fn verification_level_to_json(value: VerificationLevel) -> Json {
-  json.int(verification_level_to_int(value))
 }
 
 pub fn message_notification_level_from_int(
   value: Int,
-) -> MessageNotificationLevel {
+) -> Option(MessageNotificationLevel) {
   case value {
-    0 -> AllMessages
-    1 -> OnlyMentions
-    other -> UnknownMessageNotificationLevel(other)
+    0 -> Some(AllMessages)
+    1 -> Some(OnlyMentions)
+    _ -> None
   }
 }
 
@@ -283,18 +271,17 @@ pub fn message_notification_level_to_int(
   case value {
     AllMessages -> 0
     OnlyMentions -> 1
-    UnknownMessageNotificationLevel(other) -> other
   }
 }
 
 pub fn explicit_content_filter_from_int(
   value: Int,
-) -> ExplicitContentFilterLevel {
+) -> Option(ExplicitContentFilterLevel) {
   case value {
-    0 -> FilterDisabled
-    1 -> FilterMembersWithoutRoles
-    2 -> FilterAllMembers
-    other -> UnknownExplicitContentFilterLevel(other)
+    0 -> Some(FilterDisabled)
+    1 -> Some(FilterMembersWithoutRoles)
+    2 -> Some(FilterAllMembers)
+    _ -> None
   }
 }
 
@@ -305,15 +292,14 @@ pub fn explicit_content_filter_to_int(
     FilterDisabled -> 0
     FilterMembersWithoutRoles -> 1
     FilterAllMembers -> 2
-    UnknownExplicitContentFilterLevel(other) -> other
   }
 }
 
-pub fn mfa_level_from_int(value: Int) -> MfaLevel {
+pub fn mfa_level_from_int(value: Int) -> Option(MfaLevel) {
   case value {
-    0 -> NoMfa
-    1 -> ElevatedMfa
-    other -> UnknownMfaLevel(other)
+    0 -> Some(NoMfa)
+    1 -> Some(ElevatedMfa)
+    _ -> None
   }
 }
 
@@ -321,17 +307,16 @@ pub fn mfa_level_to_int(value: MfaLevel) -> Int {
   case value {
     NoMfa -> 0
     ElevatedMfa -> 1
-    UnknownMfaLevel(other) -> other
   }
 }
 
-pub fn nsfw_level_from_int(value: Int) -> GuildNsfwLevel {
+pub fn nsfw_level_from_int(value: Int) -> Option(GuildNsfwLevel) {
   case value {
-    0 -> DefaultNsfwLevel
-    1 -> ExplicitNsfwLevel
-    2 -> SafeNsfwLevel
-    3 -> AgeRestrictedNsfwLevel
-    other -> UnknownNsfwLevel(other)
+    0 -> Some(DefaultNsfwLevel)
+    1 -> Some(ExplicitNsfwLevel)
+    2 -> Some(SafeNsfwLevel)
+    3 -> Some(AgeRestrictedNsfwLevel)
+    _ -> None
   }
 }
 
@@ -341,21 +326,16 @@ pub fn nsfw_level_to_int(value: GuildNsfwLevel) -> Int {
     ExplicitNsfwLevel -> 1
     SafeNsfwLevel -> 2
     AgeRestrictedNsfwLevel -> 3
-    UnknownNsfwLevel(other) -> other
   }
 }
 
-pub fn nsfw_level_to_json(value: GuildNsfwLevel) -> Json {
-  json.int(nsfw_level_to_int(value))
-}
-
-pub fn premium_tier_from_int(value: Int) -> PremiumTier {
+pub fn premium_tier_from_int(value: Int) -> Option(PremiumTier) {
   case value {
-    0 -> NoTier
-    1 -> Tier1
-    2 -> Tier2
-    3 -> Tier3
-    other -> UnknownPremiumTier(other)
+    0 -> Some(NoTier)
+    1 -> Some(Tier1)
+    2 -> Some(Tier2)
+    3 -> Some(Tier3)
+    _ -> None
   }
 }
 
@@ -365,12 +345,7 @@ pub fn premium_tier_to_int(value: PremiumTier) -> Int {
     Tier1 -> 1
     Tier2 -> 2
     Tier3 -> 3
-    UnknownPremiumTier(other) -> other
   }
-}
-
-pub fn premium_tier_to_json(value: PremiumTier) -> Json {
-  json.int(premium_tier_to_int(value))
 }
 
 pub fn decoder() -> Decoder(Guild) {
@@ -386,32 +361,35 @@ pub fn decoder() -> Decoder(Guild) {
   use afk_timeout <- wire.int_field("afk_timeout", 300)
   use widget_enabled <- wire.opt_field("widget_enabled", decode.bool)
   use widget_channel_id <- wire.opt_field("widget_channel_id", id.decoder())
-  use verification_level <- enum_field(
+  use verification_level <- wire.known_field(
     "verification_level",
     verification_level_from_int,
   )
-  use default_message_notifications <- enum_field(
+  use default_message_notifications <- wire.known_field(
     "default_message_notifications",
     message_notification_level_from_int,
   )
-  use explicit_content_filter <- enum_field(
+  use explicit_content_filter <- wire.known_field(
     "explicit_content_filter",
     explicit_content_filter_from_int,
   )
   use roles <- wire.list_field("roles", role.decoder())
   use emojis <- wire.list_field("emojis", emoji.guild_emoji_decoder())
   use features <- wire.list_field("features", decode.string)
-  use mfa_level <- enum_field("mfa_level", mfa_level_from_int)
+  use mfa_level <- wire.known_field("mfa_level", mfa_level_from_int)
   use application_id <- wire.opt_field("application_id", id.decoder())
   use system_channel_id <- wire.opt_field("system_channel_id", id.decoder())
-  use system_channel_flags <- enum_field("system_channel_flags", flags.from_int)
+  use system_channel_flags <- wire.enum_field(
+    "system_channel_flags",
+    flags.from_int,
+  )
   use rules_channel_id <- wire.opt_field("rules_channel_id", id.decoder())
   use max_presences <- wire.opt_field("max_presences", wire.integer())
   use max_members <- wire.opt_field("max_members", wire.integer())
   use vanity_url_code <- wire.opt_field("vanity_url_code", decode.string)
   use description <- wire.opt_field("description", decode.string)
   use banner <- wire.opt_field("banner", decode.string)
-  use premium_tier <- enum_field("premium_tier", premium_tier_from_int)
+  use premium_tier <- wire.known_field("premium_tier", premium_tier_from_int)
   use premium_subscription_count <- wire.opt_field(
     "premium_subscription_count",
     wire.integer(),
@@ -437,7 +415,7 @@ pub fn decoder() -> Decoder(Guild) {
     "approximate_presence_count",
     wire.integer(),
   )
-  use nsfw_level <- enum_field("nsfw_level", nsfw_level_from_int)
+  use nsfw_level <- wire.known_field("nsfw_level", nsfw_level_from_int)
   use premium_progress_bar_enabled <- wire.flag_field(
     "premium_progress_bar_enabled",
     False,
@@ -509,17 +487,6 @@ pub fn decoder() -> Decoder(Guild) {
   ))
 }
 
-/// Discord's numeric enums, bound at their own type rather than as seven
-/// interchangeable ints waiting to be converted at the bottom of the decoder.
-/// Absent or null is 0, which every one of these tables reads as its default.
-fn enum_field(
-  name: String,
-  from_int: fn(Int) -> a,
-  next: fn(a) -> Decoder(b),
-) -> Decoder(b) {
-  wire.int_field(name, 0, fn(value) { next(from_int(value)) })
-}
-
 fn approximate_counts(
   members members: Option(Int),
   presences presences: Option(Int),
@@ -578,7 +545,7 @@ pub fn user_guild_decoder() -> Decoder(UserGuild) {
   use icon <- wire.opt_field("icon", decode.string)
   use banner <- wire.opt_field("banner", decode.string)
   use owner <- wire.flag_field("owner", False)
-  use perms <- wire.opt_field("permissions", permissions.decoder())
+  use perms <- wire.opt_field("permissions", permissions.effective_decoder())
   use features <- wire.list_field("features", decode.string)
   use approximate_member_count <- wire.opt_field(
     "approximate_member_count",
@@ -629,6 +596,29 @@ pub fn ban_decoder() -> Decoder(Ban) {
   decode.success(Ban(reason:, user:))
 }
 
+/// `PUT /guilds/{g}/bans/{u}`.
+pub type CreateBan {
+  /// 0 to 604800 seconds, seven days. Deletes the user's recent messages
+  /// along with the ban.
+  CreateBan(delete_message_seconds: Option(Int))
+}
+
+/// A ban that leaves the user's messages where they are.
+pub fn create_ban() -> CreateBan {
+  CreateBan(delete_message_seconds: None)
+}
+
+pub fn create_ban_body(payload: CreateBan) -> body.Body {
+  body.json(
+    wire.entries([
+      #(
+        "delete_message_seconds",
+        wire.put(wire.opt(payload.delete_message_seconds), json.int),
+      ),
+    ]),
+  )
+}
+
 // -- Endpoints ---------------------------------------------------------------
 //
 // Everything here takes the guild major parameter, so two guilds get
@@ -639,7 +629,7 @@ pub fn ban_decoder() -> Decoder(Ban) {
 /// `approximate_member_count` and `approximate_presence_count`.
 pub fn get(guild: id.GuildId, with_counts with_counts: Bool) -> Call(Guild) {
   rest.get([seg.lit("guilds"), seg.guild(guild)], rest.Decoded(decoder()))
-  |> rest.query(query.one("with_counts", query.flag(with_counts)))
+  |> rest.query(query.one("with_counts", with_counts, query.flag))
 }
 
 /// `GET /guilds/{guild.id}/channels`, as Get Guild Channels. Threads not
@@ -672,38 +662,17 @@ pub fn active_threads(guild: id.GuildId) -> Call(channel.ActiveThreads) {
   )
 }
 
-/// Which way `bans` pages, by user id. One value, not two optional fields:
-/// Discord's Get Guild Bans table says `before` wins when both are sent, so a
-/// `before` left over from the previous page would silently page backwards.
-pub type BanCursor {
-  /// Bans on users whose id sorts below this one.
-  BansBefore(id.UserId)
-  /// Bans on users whose id sorts above this one.
-  BansAfter(id.UserId)
-}
-
 /// `GET /guilds/{guild.id}/bans`, as Get Guild Bans. Discord caps `limit`
-/// at 1000.
+/// at 1000. Pages by user id.
 pub fn bans(
   guild: id.GuildId,
-  cursor cursor: Option(BanCursor),
+  cursor cursor: Option(query.Page(id.User)),
   limit limit: Option(Int),
 ) -> Call(List(Ban)) {
   rest.get(bans_at(guild), rest.Decoded(decode.list(ban_decoder())))
   |> rest.query(
-    list.flatten([
-      ban_cursor_param(cursor),
-      query.opt("limit", limit, query.number),
-    ]),
+    list.flatten([query.page(cursor), query.opt("limit", limit, query.number)]),
   )
-}
-
-fn ban_cursor_param(cursor: Option(BanCursor)) -> List(query.Param) {
-  case cursor {
-    None -> []
-    Some(BansBefore(user)) -> query.one("before", query.snowflake(user))
-    Some(BansAfter(user)) -> query.one("after", query.snowflake(user))
-  }
 }
 
 /// `GET /guilds/{guild.id}/bans/{user.id}`, as Get Guild Ban. Answers 404 when
@@ -713,16 +682,8 @@ pub fn ban_for(guild: id.GuildId, user: id.UserId) -> Call(Ban) {
 }
 
 /// `PUT /guilds/{guild.id}/bans/{user.id}`, as Create Guild Ban.
-pub fn ban(
-  guild: id.GuildId,
-  user: id.UserId,
-  ban: member.CreateBan,
-) -> Call(Nil) {
-  rest.put(
-    ban_at(guild, user),
-    member.create_ban_body(ban),
-    rest.NoContent(Nil),
-  )
+pub fn ban(guild: id.GuildId, user: id.UserId, ban: CreateBan) -> Call(Nil) {
+  rest.put(ban_at(guild, user), create_ban_body(ban), rest.NoContent(Nil))
 }
 
 /// `DELETE /guilds/{guild.id}/bans/{user.id}`, as Remove Guild Ban.
@@ -765,7 +726,7 @@ pub fn search_members(
   )
   |> rest.query(
     list.flatten([
-      query.one("query", query.text(search)),
+      query.one("query", search, query.text),
       query.opt("limit", limit, query.number),
     ]),
   )
@@ -861,21 +822,12 @@ pub fn delete_role(guild: id.GuildId, role_id: id.RoleId) -> Call(Nil) {
   rest.delete(role_at(guild, role_id), rest.NoContent(Nil))
 }
 
-/// Which way `mine` pages, by guild id. One value, because Discord does not
-/// say what it does with both.
-pub type GuildCursor {
-  /// Guilds whose id sorts below this one.
-  GuildsBefore(id.GuildId)
-  /// Guilds whose id sorts above this one.
-  GuildsAfter(id.GuildId)
-}
-
 /// `GET /users/@me/guilds`, as Get Current User Guilds. A `UserGuild` and not
 /// a `Guild`: nine keys, and `owner` and `permissions` come from nowhere else.
 /// Discord caps `limit` at 200 and defaults it to 200. A `/users` route, so no
-/// guild major parameter.
+/// guild major parameter. Pages by guild id.
 pub fn mine(
-  cursor cursor: Option(GuildCursor),
+  cursor cursor: Option(query.Page(id.Guild)),
   limit limit: Option(Int),
   with_counts with_counts: Bool,
 ) -> Call(List(UserGuild)) {
@@ -885,19 +837,11 @@ pub fn mine(
   )
   |> rest.query(
     list.flatten([
-      guild_cursor_param(cursor),
+      query.page(cursor),
       query.opt("limit", limit, query.number),
-      query.one("with_counts", query.flag(with_counts)),
+      query.one("with_counts", with_counts, query.flag),
     ]),
   )
-}
-
-fn guild_cursor_param(cursor: Option(GuildCursor)) -> List(query.Param) {
-  case cursor {
-    None -> []
-    Some(GuildsBefore(guild)) -> query.one("before", query.snowflake(guild))
-    Some(GuildsAfter(guild)) -> query.one("after", query.snowflake(guild))
-  }
 }
 
 /// `GET /users/@me/guilds/{guild.id}/member`, as Get Current User Guild

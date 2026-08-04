@@ -1,7 +1,7 @@
-//// A route is the rate-limit identity of a call. `glyde/rest/seg` is the only
-//// way to build one: alongside the path from typed segments, or read back out
-//// of a path string with `seg.from_path`. Both walk the same segment rules, so
-//// two spellings of one endpoint cannot land in two buckets.
+//// A route is the rate-limit identity of a call. Built by `glyde/rest/seg`;
+//// the constructors here are internal. Both `seg.resolve` and `seg.from_path`
+//// walk the same segment rules, so two spellings of one endpoint cannot land
+//// in two buckets.
 
 import gleam/http
 import gleam/option.{type Option, None, Some}
@@ -22,6 +22,7 @@ pub opaque type Route {
 
 /// Discord's major parameters. Two channels have independent buckets for the
 /// same endpoint; two messages in the same channel do not.
+@internal
 pub type Major {
   NoMajor
   ChannelMajor(String)
@@ -41,6 +42,7 @@ pub opaque type WebhookToken {
 }
 
 /// `None` is the tokenless `GET /webhooks/{webhook.id}` form.
+@internal
 pub fn webhook_token(token: Option(String)) -> WebhookToken {
   WebhookToken(fn() { token })
 }
@@ -95,6 +97,7 @@ const ancient_ms: Int = 1_209_600_000
 
 /// Every route goes through here, so the one endpoint Discord exempts from the
 /// global limit is recognised in a single place.
+@internal
 pub fn new(
   method: http.Method,
   template: String,
@@ -119,6 +122,7 @@ pub fn template(route: Route) -> String {
   route.template
 }
 
+@internal
 pub fn major(route: Route) -> Major {
   route.major
 }
@@ -136,7 +140,13 @@ pub fn unbound(route: Route) -> Bool {
 /// The provisional bucket key, until `x-ratelimit-bucket` names the real one.
 /// Holds the webhook token on a webhook route, so keep it out of logs.
 pub fn key(route: Route, now_ms now_ms: Int) -> String {
-  route_key(route, now_ms: now_ms) <> " " <> major_key(route)
+  compose_key(route_key(route, now_ms:), major_key(route))
+}
+
+/// Every bucket key is a left half (the provisional `route_key`, or Discord's
+/// hash once known) and the major half. One joiner, so they cannot drift.
+pub fn compose_key(left: String, major: String) -> String {
+  left <> " " <> major
 }
 
 /// The route half of the key. Discord reports one hash per route and the real
@@ -172,6 +182,7 @@ pub fn major_key(route: Route) -> String {
 
 /// Whether two majors name the same bucket. `Major` holds a closure, and
 /// comparing closures with `==` does not answer this question.
+@internal
 pub fn same_major(one: Major, other: Major) -> Bool {
   major_to_key(one) == major_to_key(other)
 }

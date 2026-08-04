@@ -33,27 +33,21 @@ pub fn channel_type_round_trips_every_value_test() {
   ]
   list.each(known, fn(row) {
     let #(wire, variant) = row
-    assert channel.channel_type_from_int(wire) == variant
+    assert channel.channel_type_from_int(wire) == Some(variant)
     assert channel.channel_type_to_int(variant) == wire
   })
 }
 
-/// 6 to 9 are withdrawn and 99 is whatever Discord ships next.
-pub fn unknown_channel_types_round_trip_test() {
+/// 6 to 9 are withdrawn and 99 is whatever Discord ships next: all `None`.
+pub fn unmodelled_channel_types_are_none_test() {
   list.each([6, 7, 8, 9, 17, 99], fn(wire) {
-    let variant = channel.channel_type_from_int(wire)
-    assert variant == channel.UnknownChannelType(wire)
-    assert channel.channel_type_to_int(variant) == wire
+    assert channel.channel_type_from_int(wire) == None
   })
 }
 
 pub fn channel_type_encodes_as_its_number_test() {
   assert json.to_string(channel.channel_type_to_json(channel.GuildForum))
     == "15"
-  assert json.to_string(
-      channel.channel_type_to_json(channel.UnknownChannelType(42)),
-    )
-    == "42"
 }
 
 /// An interaction's partial channel guarantees only these two keys.
@@ -75,11 +69,10 @@ pub fn decodes_a_thread_delete_payload_test() {
   assert found.name == None
 }
 
-/// The rest of the channel is still usable.
-pub fn an_unknown_type_still_decodes_the_channel_test() {
-  let assert Ok(found) = parse("{\"id\":\"1\",\"type\":99,\"name\":\"lobby\"}")
-  assert found.type_ == channel.UnknownChannelType(99)
-  assert found.name == Some("lobby")
+/// A `type` this build has no name for is a glyde bug, so it fails the decode
+/// rather than making every caller unwrap.
+pub fn an_unmodelled_type_fails_the_decode_test() {
+  let assert Error(_) = parse("{\"id\":\"1\",\"type\":99,\"name\":\"lobby\"}")
 }
 
 pub fn decodes_a_full_guild_text_channel_test() {
@@ -214,25 +207,28 @@ pub fn auto_archive_duration_is_a_minute_value_test() {
   ]
   list.each(known, fn(row) {
     let #(minutes, variant) = row
-    assert channel.auto_archive_duration_from_int(minutes) == variant
+    assert channel.auto_archive_duration_from_int(minutes) == Some(variant)
     assert channel.auto_archive_duration_to_int(variant) == minutes
   })
   // An ordinal would decode to the named variants. It must not.
   list.each([0, 1, 2, 3], fn(ordinal) {
-    assert channel.auto_archive_duration_from_int(ordinal)
-      == channel.UnknownAutoArchiveDuration(ordinal)
+    assert channel.auto_archive_duration_from_int(ordinal) == None
   })
 }
 
-pub fn thread_metadata_defaults_to_a_day_test() {
-  let assert Ok(meta) =
+/// Discord always sends `auto_archive_duration` on thread metadata, so an
+/// unmodelled value is a glyde bug.
+pub fn thread_metadata_rejects_unmodelled_duration_test() {
+  let assert Error(_) =
+    json.parse(
+      "{\"archived\":false,\"auto_archive_duration\":9999,\"archive_timestamp\":\"2021-01-01T00:00:00+00:00\",\"locked\":false}",
+      channel.thread_metadata_decoder(),
+    )
+  let assert Error(_) =
     json.parse(
       "{\"archive_timestamp\":\"2021-01-01T00:00:00+00:00\"}",
       channel.thread_metadata_decoder(),
     )
-  assert meta.auto_archive_duration == channel.OneDay
-  assert meta.archived == False
-  assert meta.locked == False
 }
 
 pub fn decodes_permission_overwrites_test() {
@@ -260,46 +256,48 @@ pub fn overwrite_accessors_answer_for_one_type_only_test() {
     )
   let member_rule =
     channel.PermissionOverwrite(..role_rule, type_: channel.MemberOverwrite)
-  let unknown_rule =
-    channel.PermissionOverwrite(
-      ..role_rule,
-      type_: channel.UnknownOverwriteType(9),
-    )
 
   assert channel.overwrite_target(role_rule)
     == channel.RoleTarget(id.from_string("1"))
   assert channel.overwrite_target(member_rule)
     == channel.MemberTarget(id.from_string("1"))
-  // A target this build cannot name is neither, and says so.
-  assert channel.overwrite_target(unknown_rule)
-    == channel.UnknownTarget(id.from_string("1"), 9)
+}
+
+/// One overwrite whose type this build has no name for is dropped, and the
+/// known one beside it survives.
+pub fn an_unmodelled_overwrite_type_is_filtered_test() {
+  let assert Ok(found) =
+    parse(
+      "{\"id\":\"1\",\"type\":0,\"permission_overwrites\":[{\"id\":\"9\",\"type\":9,\"allow\":\"0\",\"deny\":\"0\"},{\"id\":\"7\",\"type\":0,\"allow\":\"0\",\"deny\":\"0\"}]}",
+    )
+  let assert Some([kept]) = found.permission_overwrites
+  assert kept.type_ == channel.RoleOverwrite
+  assert id.to_string(kept.id) == "7"
 }
 
 pub fn overwrite_round_trips_through_json_test() {
   let text =
     "{\"id\":\"41771983423143936\",\"type\":0,\"allow\":\"1024\",\"deny\":\"2048\"}"
-  let assert Ok(overwrite) =
+  let assert Ok(Some(overwrite)) =
     json.parse(text, channel.permission_overwrite_decoder())
-  assert json.to_string(channel.permission_overwrite_to_json(overwrite)) == text
+  // The send path, not a bespoke encoder: what Discord sent must go back out
+  // through the same shape a caller edits and resends.
+  let body = channel.overwrite_from(overwrite)
+  assert json.to_string(channel.overwrite_body_to_json(body)) == text
 }
 
 pub fn overwrite_type_round_trips_test() {
-  assert channel.overwrite_type_from_int(0) == channel.RoleOverwrite
-  assert channel.overwrite_type_from_int(1) == channel.MemberOverwrite
-  assert channel.overwrite_type_from_int(7) == channel.UnknownOverwriteType(7)
-  assert channel.overwrite_type_to_int(channel.UnknownOverwriteType(7)) == 7
+  assert channel.overwrite_type_from_int(0) == Some(channel.RoleOverwrite)
+  assert channel.overwrite_type_from_int(1) == Some(channel.MemberOverwrite)
+  assert channel.overwrite_type_from_int(7) == None
 }
 
 pub fn video_quality_mode_round_trips_test() {
-  assert channel.video_quality_mode_from_int(1) == channel.AutoQuality
-  assert channel.video_quality_mode_from_int(2) == channel.FullQuality
-  assert channel.video_quality_mode_from_int(3)
-    == channel.UnknownVideoQualityMode(3)
-  assert channel.video_quality_mode_to_int(channel.UnknownVideoQualityMode(3))
-    == 3
+  assert channel.video_quality_mode_from_int(1) == Some(channel.AutoQuality)
+  assert channel.video_quality_mode_from_int(2) == Some(channel.FullQuality)
+  assert channel.video_quality_mode_from_int(3) == None
   // 0 is not a mode Discord defines, so it must not fold into Auto.
-  assert channel.video_quality_mode_from_int(0)
-    == channel.UnknownVideoQualityMode(0)
+  assert channel.video_quality_mode_from_int(0) == None
 }
 
 /// `app_permissions` belongs to the interaction, not to a channel inside it,
@@ -310,7 +308,7 @@ pub fn interaction_resolved_permissions_decode_test() {
       "{\"id\":\"1\",\"type\":0,\"permissions\":\"1024\",\"app_permissions\":\"2048\"}",
     )
   let assert Some(theirs) = found.permissions
-  assert permissions.to_string(theirs) == "1024"
+  assert permissions.to_string(permissions.raw(theirs)) == "1024"
 }
 
 pub fn channel_flags_test() {
@@ -376,7 +374,7 @@ pub fn predicates_test() {
   let textable = [0, 1, 2, 3, 5, 10, 11, 12, 13]
   let voice = [2, 13]
   let thread_only = [15, 16]
-  let every = [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16, 6, 99]
+  let every = [0, 1, 2, 3, 4, 5, 10, 11, 12, 13, 14, 15, 16]
 
   list.each(every, fn(type_) {
     let found = of(type_)
@@ -397,16 +395,6 @@ pub fn forum_and_media_are_not_textable_test() {
   assert channel.is_textable(media.type_) == False
   assert channel.is_thread_only(forum.type_) == True
   assert channel.is_thread_only(media.type_) == True
-}
-
-/// A wrong guess costs a 400 that reads like a permissions bug.
-pub fn no_predicate_answers_true_for_an_unknown_type_test() {
-  let assert Ok(found) = parse("{\"id\":\"1\",\"type\":99}")
-  assert channel.is_thread(found.type_) == False
-  assert channel.is_dm(found.type_) == False
-  assert channel.is_textable(found.type_) == False
-  assert channel.is_voice(found.type_) == False
-  assert channel.is_thread_only(found.type_) == False
 }
 
 /// The archived listings page, so `has_more` answers whether to ask again.
@@ -450,8 +438,9 @@ pub fn thread_list_tolerates_nulls_test() {
   assert empty.has_more == False
 }
 
-pub fn a_channel_without_an_id_fails_test() {
+pub fn a_channel_without_an_id_or_type_fails_test() {
   let assert Error(_) = parse("{\"type\":0}")
+  // `type` is required too.
   let assert Error(_) = parse("{\"id\":\"1\"}")
   // Discord sends snowflakes as strings, and a JSON number is not one.
   let assert Error(_) = parse("{\"id\":41771983423143937,\"type\":0}")
@@ -613,18 +602,19 @@ pub fn video_quality_keeps_discords_numbers_test() {
 
 pub fn settable_flags_keep_discords_bits_test() {
   let cases = [
-    #([], 0),
-    #([channel.RequireTag], 16),
-    #([channel.HideMediaDownloadOptions], 32_768),
-    #([channel.RequireTag, channel.HideMediaDownloadOptions], 32_784),
+    #(Some(False), Some(False), 0),
+    #(Some(True), None, 16),
+    #(None, Some(True), 32_768),
+    #(Some(True), Some(True), 32_784),
   ]
 
   list.each(cases, fn(row) {
-    let #(flags, bits) = row
+    let #(require_tag, hide_media_download_options, bits) = row
     let body =
       channel.CreateChannel(
         ..channel.create_channel("forum"),
-        flags: Some(flags),
+        require_tag:,
+        hide_media_download_options:,
       )
 
     assert created(body)
@@ -634,17 +624,15 @@ pub fn settable_flags_keep_discords_bits_test() {
   })
 }
 
-/// The list is the whole bitfield, so dropping a flag turns it off rather than
-/// leaving what was already there.
+/// Touching either bit sends the whole bitfield, so a `False` turns the other
+/// bit off too.
 pub fn a_flag_edit_replaces_the_whole_bitfield_test() {
   let base = channel.edit_guild_channel()
 
   assert edited(base) == "{}"
-  assert edited(channel.EditGuildChannel(..base, flags: Some([])))
+  assert edited(channel.EditGuildChannel(..base, require_tag: Some(False)))
     == "{\"flags\":0}"
-  assert edited(
-      channel.EditGuildChannel(..base, flags: Some([channel.RequireTag])),
-    )
+  assert edited(channel.EditGuildChannel(..base, require_tag: Some(True)))
     == "{\"flags\":16}"
 }
 
@@ -769,33 +757,19 @@ pub fn a_decoded_overwrite_goes_back_out_unchanged_test() {
       deny: permissions.new([permissions.SendMessages]),
     )
 
-  let assert Ok(body) = channel.overwrite_from(read)
+  let body = channel.overwrite_from(read)
 
   assert json.to_string(channel.overwrite_body_to_json(body))
     == "{\"id\":\"42\",\"type\":1,\"allow\":\"1024\",\"deny\":\"2048\"}"
   assert channel.overwrite_id(body) == id.from_string("42")
 
-  let assert Ok(role) =
+  let role =
     channel.overwrite_from(
       channel.PermissionOverwrite(..read, type_: channel.RoleOverwrite),
     )
 
   assert json.to_string(channel.overwrite_body_to_json(role))
     == "{\"id\":\"42\",\"type\":0,\"allow\":\"1024\",\"deny\":\"2048\"}"
-}
-
-/// A type added after this build cannot be sent back: Discord reads `type` to
-/// decide what the id means, so guessing applies the overwrite to someone.
-pub fn an_unknown_overwrite_type_cannot_be_sent_back_test() {
-  let read =
-    channel.PermissionOverwrite(
-      id: id.from_string("7"),
-      type_: channel.UnknownOverwriteType(9),
-      allow: permissions.none(),
-      deny: permissions.none(),
-    )
-
-  assert channel.overwrite_from(read) == Error(9)
 }
 
 /// Discord meters name and topic edits at two per ten minutes and says so in
@@ -844,7 +818,7 @@ pub fn a_thread_from_a_message_needs_only_a_name_test() {
 pub fn a_standalone_thread_states_its_type_test() {
   let body =
     channel.CreateThread(
-      ..channel.create_thread("standup", channel.PublicThread),
+      ..channel.create_thread("standup", channel.AsPublicThread),
       auto_archive_duration: Some(channel.OneDay),
     )
 
@@ -855,7 +829,7 @@ pub fn a_standalone_thread_states_its_type_test() {
 pub fn an_invitable_private_thread_test() {
   let body =
     channel.CreateThread(
-      ..channel.create_thread("hush", channel.PrivateThread),
+      ..channel.create_thread("hush", channel.AsPrivateThread),
       invitable: Some(False),
       rate_limit_per_user: Some(30),
     )
@@ -869,7 +843,7 @@ pub fn an_announcement_thread_test() {
   assert payload_json(
       channel.create_thread_body(channel.create_thread(
         "coverage",
-        channel.AnnouncementThread,
+        channel.AsAnnouncementThread,
       )),
     )
     == "{\"name\":\"coverage\",\"type\":10}"

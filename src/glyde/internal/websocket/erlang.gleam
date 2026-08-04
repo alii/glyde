@@ -55,6 +55,8 @@ pub type SocketProblem {
   Crashed(reason: String)
 }
 
+/// Why `connect` did not hand back an open socket. Nothing here can come out
+/// of a `send_*` or `receive`: those return `LiveError`.
 pub type Error {
   /// Refused before anything was dialled.
   BadUrl(url: String, problem: UrlProblem)
@@ -63,8 +65,9 @@ pub type Error {
   /// `connect` was handed.
   BadNonce(bytes: Int)
 
-  /// TLS would not come up: DNS, a refused port, a certificate that did not
-  /// verify.
+  /// TLS would not come up, or the socket gave out during the handshake: DNS,
+  /// a refused port, a certificate that did not verify, a peer that hung up
+  /// before the upgrade finished.
   ConnectFailed(reason: String)
 
   /// The `ssl` application would not start, usually an OTP build without the
@@ -77,18 +80,22 @@ pub type Error {
   HandshakeRefused(failure: handshake.Failure)
 
   /// The bytes the server sent are not a response head at all.
-  HandshakeUnreadable(reason: handshake.Bad)
+  HandshakeUnreadable(reason: handshake.ParseError)
 
   /// `max_head_bytes` arrived with no blank line ending the head.
   HeadTooLong(bytes: Int)
+}
+
+/// Why an open socket stopped. Only these four can come out of `send_*` and
+/// `receive`; a caller matching on one never has a connect-phase arm to write.
+pub type LiveError {
+  /// The peer went away. Any close frame it sent is already in the messages
+  /// received.
+  Closed
 
   /// The socket itself failed after it was up. The problem is unrendered, so a
   /// caller can tell a timeout from a TLS alert without reading words.
   SocketFailed(problem: SocketProblem)
-
-  /// The peer went away. Any close frame it sent is already in the messages
-  /// received.
-  Closed
 
   /// The bytes stopped being RFC 6455. The reason is `frame`'s, unrendered, so
   /// a caller can match it.
@@ -118,14 +125,19 @@ pub fn error_to_string(error: Error) -> String {
     HandshakeRefused(failure) ->
       "handshake failed: " <> handshake.failure_to_string(failure)
     HandshakeUnreadable(reason) ->
-      "handshake failed: " <> handshake.malformed_to_string(reason)
+      "handshake failed: " <> handshake.parse_error_to_string(reason)
     HeadTooLong(bytes) ->
       "handshake failed: response head never ended in "
       <> int.to_string(bytes)
       <> " bytes"
+  }
+}
+
+pub fn live_error_to_string(error: LiveError) -> String {
+  case error {
+    Closed -> "connection closed"
     SocketFailed(problem) ->
       "socket failed: " <> socket_problem_to_string(problem)
-    Closed -> "connection closed"
     ProtocolFailed(reason) ->
       "protocol violated: " <> frame.violation_to_string(reason)
     BufferFull(bytes) ->
@@ -159,13 +171,7 @@ pub type Received {
   Silent(socket: Socket)
 
   /// The socket is finished and already torn down. Nothing to carry on with.
-  Dropped(error: Error)
-}
-
-/// Bytes held that have not become a message, against the `max_bytes`
-/// `connect` was given. Past it the next `receive` is `Dropped(BufferFull)`.
-pub fn buffered(socket: Socket) -> Int {
-  stream.buffered(socket.stream)
+  Dropped(error: LiveError)
 }
 
 /// Dial a `wss` URL and complete the upgrade, returning once it is open.
@@ -201,7 +207,7 @@ pub fn send_text(
   socket: Socket,
   text: String,
   mask: frame.Mask,
-) -> Result(Nil, Error) {
+) -> Result(Nil, LiveError) {
   send(socket, frame.SendText, bit_array.from_string(text), mask)
 }
 
@@ -209,7 +215,7 @@ pub fn send_bytes(
   socket: Socket,
   bytes: BitArray,
   mask: frame.Mask,
-) -> Result(Nil, Error) {
+) -> Result(Nil, LiveError) {
   send(socket, frame.SendBinary, bytes, mask)
 }
 
@@ -218,7 +224,7 @@ pub fn send_pong(
   socket: Socket,
   payload: BitArray,
   mask: frame.Mask,
-) -> Result(Nil, Error) {
+) -> Result(Nil, LiveError) {
   send(socket, frame.SendPong, payload, mask)
 }
 
@@ -264,7 +270,7 @@ fn left_of(deadline: Int) -> Int {
 }
 
 /// `Dropped` hands back no socket, so the teardown happens here or never.
-fn dropped(socket: Socket, error: Error) -> Received {
+fn dropped(socket: Socket, error: LiveError) -> Received {
   ssl_close(socket.ssl)
   Dropped(error)
 }
@@ -299,9 +305,14 @@ fn send(
   kind: frame.Sendable,
   payload: BitArray,
   mask: frame.Mask,
-) -> Result(Nil, Error) {
-  ssl_send(socket.ssl, frame.encode(kind, payload, mask))
-  |> result.map_error(trouble_to_error)
+) -> Result(Nil, LiveError) {
+  case ssl_send(socket.ssl, frame.encode(kind, payload, mask)) {
+    Ok(Nil) -> Ok(Nil)
+    Error(trouble) -> {
+      ssl_close(socket.ssl)
+      Error(trouble_to_error(trouble))
+    }
+  }
 }
 
 type Target {
@@ -384,8 +395,8 @@ fn dial(target: Target, timeout: Int) -> Result(SslSocket, Error) {
   |> result.map_error(fn(trouble) { ConnectFailed(said(trouble)) })
 }
 
-/// A dial that does not come up is `ConnectFailed` however it failed: there is
-/// no socket either way, and only the words differ.
+/// Before the upgrade completes any socket trouble is `ConnectFailed`: there
+/// is no open socket either way, and only the words differ.
 fn said(trouble: Trouble) -> String {
   case trouble {
     Hangup -> "closed"
@@ -415,7 +426,8 @@ fn upgrade(
     )
 
   use _ <- result.try(
-    ssl_send(ssl, request) |> result.map_error(trouble_to_error),
+    ssl_send(ssl, request)
+    |> result.map_error(fn(trouble) { ConnectFailed(said(trouble)) }),
   )
   use head <- result.try(read_head(
     ssl,
@@ -443,7 +455,7 @@ fn read_head(
     handshake.Partial -> {
       case ssl_recv(ssl, left_of(deadline)) {
         Ok(bytes) -> read_head(ssl, handshake.feed(reader, bytes), deadline)
-        Error(trouble) -> Error(trouble_to_error(trouble))
+        Error(trouble) -> Error(ConnectFailed(said(trouble)))
       }
     }
   }
@@ -459,7 +471,7 @@ type Trouble {
   Raised(reason: String)
 }
 
-fn trouble_to_error(trouble: Trouble) -> Error {
+fn trouble_to_error(trouble: Trouble) -> LiveError {
   case trouble {
     Hangup -> Closed
     Stalled -> SocketFailed(TimedOut)

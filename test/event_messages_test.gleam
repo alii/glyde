@@ -115,23 +115,19 @@ pub fn a_reaction_type_that_is_not_a_number_is_malformed_test() {
   assert errors != []
 }
 
-/// An unknown reaction type round trips rather than sinking the event.
-pub fn an_unknown_reaction_type_round_trips_test() {
+/// A reaction type this build has no name for fails the decode, so it reaches
+/// `on_status` as `Undecodable` rather than the handler as `None`.
+pub fn an_unmodelled_reaction_type_fails_the_decode_test() {
   let body =
     "{\"user_id\":\"70\",\"channel_id\":\"20\",\"message_id\":\"30\",\"emoji\":{\"name\":\"x\"},\"type\":7}"
-  let assert event.MessageReactionAdd(added) =
-    decoded("MESSAGE_REACTION_ADD", body)
+  let assert event.Malformed(errors:) =
+    event.dispatch("MESSAGE_REACTION_ADD", payload(body)).outcome
+  assert errors != []
 
-  assert added.type_ == message.UnknownReactionType(7)
-  assert message.reaction_type_to_int(added.type_) == 7
-
-  let types = [
-    message.NormalReaction,
-    message.BurstReaction,
-    message.UnknownReactionType(7),
-  ]
+  let types = [message.NormalReaction, message.BurstReaction]
   list.each(types, fn(value) {
     assert message.reaction_type_from_int(message.reaction_type_to_int(value))
-      == value
+      == Some(value)
   })
+  assert message.reaction_type_from_int(7) == None
 }

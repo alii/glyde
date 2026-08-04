@@ -13,12 +13,14 @@ import glyde/gateway/presence
 import glyde/id
 import glyde/intents
 import glyde/rng
+import glyde/token
+import glyde/websocket/sendcode
 
 /// One thing the driver asked the outside world to do. Timer stamps live in
 /// `Fake.timers`, so firing one goes through the value the adapter was given.
 type Call {
   Dialled(conn: gateway.Conn, host: String, path: String)
-  Sent(op: frame.Opcode, text: String)
+  Sent(op: frame.SendOp, text: String)
   Shut(code: Int)
   Dropped
   Armed(timer: gateway.Timer, in_ms: Int)
@@ -54,12 +56,16 @@ fn did(fake: Fake, call: Call) -> Fake {
 fn recording() -> client.Transport(Fake) {
   client.Transport(
     open: fn(fake, conn, host, path) {
+      let host = gateway.host_to_string(host)
       Fake(..did(fake, Dialled(conn, host, path)), conn: Some(conn))
     },
     send: fn(fake, payload: frame.Outbound) {
-      did(fake, Sent(op: payload.op, text: payload.text))
+      did(
+        fake,
+        Sent(op: frame.outbound_op(payload), text: frame.outbound_text(payload)),
+      )
     },
-    close: fn(fake, code) { did(fake, Shut(code)) },
+    close: fn(fake, code) { did(fake, Shut(sendcode.to_int(code))) },
     drop: fn(fake) { did(fake, Dropped) },
     // Arming replaces whatever was armed under the same name.
     arm: fn(fake, timer, in_ms, stamp) {
@@ -104,7 +110,7 @@ const identify = "{\"op\":2,\"d\":{\"token\":\"tok\",\"properties\":{\"os\":\"te
 /// The properties are pinned so an IDENTIFY assertion can name them.
 fn conf() -> gateway.Config {
   gateway.Config(
-    ..gateway.config(token: "tok", intents: intents.none()),
+    ..gateway.config(token: token.new("tok"), intents: intents.none()),
     properties: gateway.properties(
       os: "test",
       browser: "glyde",
@@ -117,7 +123,7 @@ fn conf() -> gateway.Config {
 /// range and every expected number is one you can write down.
 fn around(shard: gateway.Shard) -> client.Bot(Fake) {
   client.from_shard(
-    shard: gateway.Shard(..shard, rng: rng.fixed(0)),
+    shard: gateway.with_rng(shard, rng.fixed(0)),
     state: nothing(),
     transport: recording(),
   )
@@ -267,7 +273,7 @@ pub fn a_whole_connection_reaches_the_transport_test() {
       Cancelled(gateway.Handshake),
       Armed(gateway.Heartbeat, 0),
       Noted(gateway.AwaitingIdentifySlot),
-      Sent(frame.OpIdentify, identify),
+      Sent(frame.SendIdentify, identify),
       Armed(gateway.Handshake, handshake_ms),
       // READY.
       Cancelled(gateway.Handshake),
@@ -294,7 +300,7 @@ pub fn a_bot_with_no_transport_still_advances_test() {
       intents: intents.none(),
       transport: client.discarding(),
     )
-  assert client.shard(client.start(bare)).phase
+  assert gateway.phase(client.shard(client.start(bare)))
     == gateway.Waiting(gateway.Identify)
 }
 
@@ -306,8 +312,8 @@ pub fn new_is_the_default_config_test() {
       intents: intents.new([intents.Guilds]),
       transport: client.discarding(),
     )
-  let config = client.shard(bare).config
-  assert config.token == "tok"
+  let config = gateway.shard_config(client.shard(bare))
+  assert token.reveal(config.token) == "tok"
   assert config.intents == intents.new([intents.Guilds])
   assert config.host == gateway.default_host()
   assert config.api_version == 10
@@ -409,9 +415,9 @@ pub fn handler_commands_keep_their_order_test() {
 pub fn collecting_keeps_every_event_test() {
   let bot =
     client.from_shard(
-      shard: gateway.Shard(
-        ..gateway.new(config: conf(), seed: 1),
-        rng: rng.fixed(0),
+      shard: gateway.with_rng(
+        gateway.new(config: conf(), seed: 1),
+        rng.fixed(0),
       ),
       state: [],
       transport: client.discarding(),
@@ -441,7 +447,7 @@ fn name_of(event: gateway.Event) -> String {
 /// A bot with no recording transport still has to fire timers, and the shard is
 /// the only place its stamps exist.
 fn fire_bare(bot: client.Bot(s), timer: gateway.Timer) -> client.Bot(s) {
-  let stamps = client.shard(bot).stamps
+  let stamps = gateway.stamps(client.shard(bot))
   let stamp = case timer {
     gateway.Heartbeat -> stamps.heartbeat
     gateway.Handshake -> stamps.handshake
@@ -459,7 +465,7 @@ pub fn a_frame_from_an_abandoned_socket_is_ignored_test() {
 
   assert log(after)
     == [Noted(gateway.Ignored(gateway.StaleConn(gateway.Conn(99))))]
-  assert client.shard(after).phase == client.shard(bot).phase
+  assert gateway.phase(client.shard(after)) == gateway.phase(client.shard(bot))
 }
 
 /// A timer fire that lost the race with its own cancellation is recognised by
@@ -470,7 +476,7 @@ pub fn a_timer_fire_that_lost_its_race_is_ignored_test() {
 
   assert log(after)
     == [Noted(gateway.Ignored(gateway.StaleTimer(gateway.Heartbeat)))]
-  assert client.shard(after).phase == client.shard(bot).phase
+  assert gateway.phase(client.shard(after)) == gateway.phase(client.shard(bot))
 }
 
 /// The transport reports our own close back, and that report must not start a
@@ -588,14 +594,17 @@ pub fn compression_shows_up_in_the_path_test() {
 /// context to inflate with is turned back off rather than dialled.
 pub fn compression_without_an_inflater_is_not_constructible_test() {
   let plain = around(gateway.new(config: compressed(), seed: 1))
-  assert client.shard(plain).config.compression == gateway.NoCompression
+  assert gateway.shard_config(client.shard(plain)).compression
+    == gateway.NoCompression
 
   let inflating = client.with_inflater(plain, zlib())
-  assert client.shard(inflating).config.compression == gateway.ZlibStream
+  assert gateway.shard_config(client.shard(inflating)).compression
+    == gateway.ZlibStream
 
   // And back: dropping the context drops the mode with it.
   let plain_again = client.with_inflater(inflating, client.Plaintext)
-  assert client.shard(plain_again).config.compression == gateway.NoCompression
+  assert gateway.shard_config(client.shard(plain_again)).compression
+    == gateway.NoCompression
 }
 
 /// The mode the bot ends up in is the one it dials with, so a config the
@@ -644,12 +653,11 @@ pub fn a_guild_member_request_is_a_command_like_any_other_test() {
   let bot =
     client.command(
       bot,
-      command.RequestGuildMembers(command.ByPrefix(
+      command.RequestGuildMembers(
         guild: id.from_string("41771983423143937"),
-        prefix: "a",
-        limit:,
         nonce: None,
-      )),
+        select: command.ByPrefix(prefix: "a", limit:),
+      ),
     )
 
   assert sent(log(bot))
@@ -758,7 +766,7 @@ pub fn the_pure_core_is_still_underneath_test() {
   let gateway.Step(shard:, outputs:) =
     gateway.step(client.shard(bot), gateway.Frame(conn, hello()))
   assert list.contains(outputs, gateway.RequestIdentifySlot(conn))
-  assert shard.phase
+  assert gateway.phase(shard)
     == gateway.Queued(gateway.Beat(
       interval_ms: interval,
       unacked: 0,
@@ -766,7 +774,7 @@ pub fn the_pure_core_is_still_underneath_test() {
     ))
 
   let driven = client.received(bot, conn, hello())
-  assert client.shard(driven).phase
+  assert gateway.phase(client.shard(driven))
     == gateway.Identifying(gateway.Beat(
       interval_ms: interval,
       unacked: 0,

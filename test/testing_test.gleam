@@ -191,20 +191,12 @@ pub fn without_notes_leaves_the_protocol_effects_test() {
     == [Shut(1), Arm(Retry, 1000, 1)]
 }
 
-pub fn notes_are_assertable_on_their_own_test() {
-  let run = testing.drive(guarded(), connected(), [Zombie, Frame(1), Ready(1)])
-
-  assert testing.notes(is_note, run.outputs)
-    == [Note("stale frame"), Note("stale ready")]
-}
-
 pub fn a_machine_with_no_diagnostics_strips_nothing_test() {
   let counter = fn(n, i) { #(n + i, [n]) }
   let none_are_notes = fn(_) { False }
   let run = testing.drive(counter, 0, [1, 2])
 
   assert testing.without_notes(none_are_notes, run.outputs) == run.outputs
-  assert testing.notes(none_are_notes, run.outputs) == []
 }
 
 pub fn orderings_are_lexicographic_by_position_test() {
@@ -257,7 +249,7 @@ pub fn a_correct_guard_holds_in_every_ordering_test() {
       hazard(),
       never_live_on_abandoned,
     )
-    == testing.Held
+    == Ok(testing.Held)
 }
 
 /// Driven straight through, the broken machine looks fine.
@@ -274,17 +266,17 @@ pub fn every_ordering_finds_it_and_names_it_test() {
       hazard(),
       never_live_on_abandoned,
     )
-    == testing.Broke(
+    == Ok(testing.Broke(
       ordering: [Zombie, Ready(1), Frame(1)],
       broke_after: [Zombie, Ready(1)],
       run: testing.drive(phase_only(), connected(), [Zombie, Ready(1)]),
-    )
+    ))
 }
 
 /// Three of the six orderings break, and the one reported is the one that
 /// needed the fewest inputs rather than the first the enumeration reached.
 pub fn the_shortest_break_is_the_one_reported_test() {
-  let assert testing.Broke(ordering:, broke_after:, ..) =
+  let assert Ok(testing.Broke(ordering:, broke_after:, ..)) =
     testing.every_ordering(
       phase_only(),
       connected(),
@@ -316,11 +308,11 @@ pub fn a_starting_state_that_already_fails_breaks_after_nothing_test() {
       [Frame(1), Zombie],
       never_live_on_abandoned,
     )
-    == testing.Broke(
+    == Ok(testing.Broke(
       ordering: [Frame(1), Zombie],
       broke_after: [],
       run: testing.Run(state: broken, outputs: []),
-    )
+    ))
 }
 
 /// A liveness property is false before anything happens, which is why
@@ -335,7 +327,7 @@ pub fn a_liveness_invariant_breaks_before_it_starts_test() {
     })
   }
 
-  let assert testing.Broke(broke_after:, run:, ..) =
+  let assert Ok(testing.Broke(broke_after:, run:, ..)) =
     testing.every_ordering(
       guarded(),
       connected(),
@@ -349,7 +341,7 @@ pub fn a_liveness_invariant_breaks_before_it_starts_test() {
 
 pub fn an_invariant_that_always_holds_needs_no_inputs_test() {
   assert testing.every_ordering(guarded(), connected(), [], fn(_) { True })
-    == testing.Held
+    == Ok(testing.Held)
 }
 
 pub fn the_runner_refuses_more_inputs_than_it_can_permute_test() {
@@ -361,14 +353,14 @@ pub fn the_runner_refuses_more_inputs_than_it_can_permute_test() {
       too_many,
       never_live_on_abandoned,
     )
-    == testing.Refused(testing.TooManyToPermute(testing.max_permuted + 1))
+    == Error(testing.TooManyToPermute(testing.max_permuted + 1))
 }
 
 pub fn the_cap_itself_runs_test() {
   let inputs = list.repeat(Frame(1), testing.max_permuted)
 
   assert testing.every_ordering(guarded(), connected(), inputs, fn(_) { True })
-    == testing.Held
+    == Ok(testing.Held)
 }
 
 pub fn every_ordering_converges_when_the_guard_is_right_test() {
@@ -406,7 +398,7 @@ pub fn a_broken_guard_makes_the_orderings_disagree_test() {
 /// caller picks what has to agree.
 pub fn a_finer_observation_can_disagree_without_a_bug_test() {
   let assert Ok(groups) =
-    testing.outcomes(guarded(), connected(), hazard(), testing.final_state)
+    testing.outcomes(guarded(), connected(), hazard(), fn(run) { run.state })
 
   assert list.length(groups) > 1
 }
@@ -491,7 +483,7 @@ pub fn a_stamp_the_machine_did_not_hand_out_is_stale_test() {
   let clock =
     testing.feed_all(guarded(), timers(), started(), [Zombie, Fired(Retry, 99)])
 
-  assert testing.notes(is_note, clock.outputs) == [Note("stale retry")]
+  assert list.filter(clock.outputs, is_note) == [Note("stale retry")]
 }
 
 pub fn advancing_short_of_a_deadline_fires_nothing_test() {

@@ -23,7 +23,7 @@ import glyde/channel
 import glyde/component
 import glyde/embed.{type Embed}
 import glyde/emoji.{type Emoji, Custom, Unicode}
-import glyde/field.{Absent, Null, Present}
+import glyde/field.{type Field, Absent, Null, Present}
 import glyde/flags.{type Flags}
 import glyde/id
 import glyde/member
@@ -33,7 +33,7 @@ import glyde/rest/body.{type Body}
 import glyde/rest/query
 import glyde/rest/seg
 import glyde/user
-import glyde/wire.{type Field}
+import glyde/wire
 
 pub type Message {
   Message(
@@ -112,14 +112,13 @@ pub type StickerItem {
   StickerItem(id: id.StickerId, name: String, format_type: StickerFormat)
 }
 
-/// Discord's sticker format table. A missing `format_type` reads as
-/// `UnknownStickerFormat(0)`, which is not a value Discord sends.
+/// Discord's sticker format table. A value this build has no name for fails
+/// the decode.
 pub type StickerFormat {
   PngSticker
   ApngSticker
   LottieSticker
   GifSticker
-  UnknownStickerFormat(Int)
 }
 
 pub type Reaction {
@@ -142,17 +141,17 @@ pub type ReactionCountDetails {
 
 /// Discord's two kinds of reaction, one type for both the gateway events and
 /// the `type` query parameter on the reactions route. A burst reaction is the
-/// animated "super reaction" a Nitro subscriber can send.
+/// animated "super reaction" a Nitro subscriber can send. A value this build
+/// has no name for fails the decode.
 pub type ReactionType {
   NormalReaction
   BurstReaction
-  /// Discord adds values here between releases.
-  UnknownReactionType(Int)
 }
 
 pub type MessageReference {
   MessageReference(
-    /// Absent means DEFAULT, not unknown.
+    /// Absent reads as DEFAULT. A value this build has no name for fails the
+    /// decode.
     type_: MessageReferenceType,
     /// Absent on CHANNEL_FOLLOW_ADD and THREAD_CREATED, which reference a
     /// channel and not a message.
@@ -162,17 +161,17 @@ pub type MessageReference {
   )
 }
 
+/// A value this build has no name for fails the decode.
 pub type MessageReferenceType {
   /// Replies, crossposts, pins and thread starters. Populates
   /// `referenced_message`.
   DefaultReference
   /// Forwards. Populates `message_snapshots`, which is not modelled.
   ForwardReference
-  UnknownReference(Int)
 }
 
 /// 0 to 46, with holes at 13, 30, 33 to 35, 40 to 43 and 45. Never index this
-/// by position.
+/// by position. A value this build has no name for fails the decode.
 pub type MessageType {
   DefaultMessage
   RecipientAdd
@@ -211,49 +210,48 @@ pub type MessageType {
   GuildIncidentReportFalseAlarm
   PurchaseNotification
   PollResult
-  UnknownMessageType(Int)
 }
 
-pub fn message_type_from_int(value: Int) -> MessageType {
+pub fn message_type_from_int(value: Int) -> Option(MessageType) {
   case value {
-    0 -> DefaultMessage
-    1 -> RecipientAdd
-    2 -> RecipientRemove
-    3 -> Call
-    4 -> ChannelNameChange
-    5 -> ChannelIconChange
-    6 -> ChannelPinnedMessage
-    7 -> UserJoin
-    8 -> GuildBoost
-    9 -> GuildBoostTier1
-    10 -> GuildBoostTier2
-    11 -> GuildBoostTier3
-    12 -> ChannelFollowAdd
-    14 -> GuildDiscoveryDisqualified
-    15 -> GuildDiscoveryRequalified
-    16 -> GuildDiscoveryGracePeriodInitialWarning
-    17 -> GuildDiscoveryGracePeriodFinalWarning
-    18 -> ThreadCreated
-    19 -> ReplyMessage
-    20 -> ChatInputCommand
-    21 -> ThreadStarterMessage
-    22 -> GuildInviteReminder
-    23 -> ContextMenuCommand
-    24 -> AutoModerationAction
-    25 -> RoleSubscriptionPurchase
-    26 -> InteractionPremiumUpsell
-    27 -> StageStart
-    28 -> StageEnd
-    29 -> StageSpeaker
-    31 -> StageTopic
-    32 -> GuildApplicationPremiumSubscription
-    36 -> GuildIncidentAlertModeEnabled
-    37 -> GuildIncidentAlertModeDisabled
-    38 -> GuildIncidentReportRaid
-    39 -> GuildIncidentReportFalseAlarm
-    44 -> PurchaseNotification
-    46 -> PollResult
-    other -> UnknownMessageType(other)
+    0 -> Some(DefaultMessage)
+    1 -> Some(RecipientAdd)
+    2 -> Some(RecipientRemove)
+    3 -> Some(Call)
+    4 -> Some(ChannelNameChange)
+    5 -> Some(ChannelIconChange)
+    6 -> Some(ChannelPinnedMessage)
+    7 -> Some(UserJoin)
+    8 -> Some(GuildBoost)
+    9 -> Some(GuildBoostTier1)
+    10 -> Some(GuildBoostTier2)
+    11 -> Some(GuildBoostTier3)
+    12 -> Some(ChannelFollowAdd)
+    14 -> Some(GuildDiscoveryDisqualified)
+    15 -> Some(GuildDiscoveryRequalified)
+    16 -> Some(GuildDiscoveryGracePeriodInitialWarning)
+    17 -> Some(GuildDiscoveryGracePeriodFinalWarning)
+    18 -> Some(ThreadCreated)
+    19 -> Some(ReplyMessage)
+    20 -> Some(ChatInputCommand)
+    21 -> Some(ThreadStarterMessage)
+    22 -> Some(GuildInviteReminder)
+    23 -> Some(ContextMenuCommand)
+    24 -> Some(AutoModerationAction)
+    25 -> Some(RoleSubscriptionPurchase)
+    26 -> Some(InteractionPremiumUpsell)
+    27 -> Some(StageStart)
+    28 -> Some(StageEnd)
+    29 -> Some(StageSpeaker)
+    31 -> Some(StageTopic)
+    32 -> Some(GuildApplicationPremiumSubscription)
+    36 -> Some(GuildIncidentAlertModeEnabled)
+    37 -> Some(GuildIncidentAlertModeDisabled)
+    38 -> Some(GuildIncidentReportRaid)
+    39 -> Some(GuildIncidentReportFalseAlarm)
+    44 -> Some(PurchaseNotification)
+    46 -> Some(PollResult)
+    _ -> None
   }
 }
 
@@ -296,20 +294,18 @@ pub fn message_type_to_int(value: MessageType) -> Int {
     GuildIncidentReportFalseAlarm -> 39
     PurchaseNotification -> 44
     PollResult -> 46
-    UnknownMessageType(other) -> other
   }
 }
 
 pub fn message_type_decoder() -> Decoder(MessageType) {
-  wire.integer() |> decode.map(message_type_from_int)
+  wire.strict(message_type_from_int, DefaultMessage, "MessageType")
 }
 
 pub fn message_type_to_json(value: MessageType) -> Json {
   json.int(message_type_to_int(value))
 }
 
-/// Whether `DELETE /channels/{id}/messages/{id}` accepts this message. An
-/// unknown type answers False, because a guess costs a confusing 400.
+/// Whether `DELETE /channels/{id}/messages/{id}` accepts this message.
 pub fn is_deletable(value: MessageType) -> Bool {
   case value {
     RecipientAdd
@@ -318,16 +314,47 @@ pub fn is_deletable(value: MessageType) -> Bool {
     | ChannelNameChange
     | ChannelIconChange
     | ThreadStarterMessage -> False
-    UnknownMessageType(_) -> False
-    _ -> True
+    DefaultMessage
+    | ChannelPinnedMessage
+    | UserJoin
+    | GuildBoost
+    | GuildBoostTier1
+    | GuildBoostTier2
+    | GuildBoostTier3
+    | ChannelFollowAdd
+    | GuildDiscoveryDisqualified
+    | GuildDiscoveryRequalified
+    | GuildDiscoveryGracePeriodInitialWarning
+    | GuildDiscoveryGracePeriodFinalWarning
+    | ThreadCreated
+    | ReplyMessage
+    | ChatInputCommand
+    | GuildInviteReminder
+    | ContextMenuCommand
+    | AutoModerationAction
+    | RoleSubscriptionPurchase
+    | InteractionPremiumUpsell
+    | StageStart
+    | StageEnd
+    | StageSpeaker
+    | StageTopic
+    | GuildApplicationPremiumSubscription
+    | GuildIncidentAlertModeEnabled
+    | GuildIncidentAlertModeDisabled
+    | GuildIncidentReportRaid
+    | GuildIncidentReportFalseAlarm
+    | PurchaseNotification
+    | PollResult -> True
   }
 }
 
-pub fn message_reference_type_from_int(value: Int) -> MessageReferenceType {
+pub fn message_reference_type_from_int(
+  value: Int,
+) -> Option(MessageReferenceType) {
   case value {
-    0 -> DefaultReference
-    1 -> ForwardReference
-    other -> UnknownReference(other)
+    0 -> Some(DefaultReference)
+    1 -> Some(ForwardReference)
+    _ -> None
   }
 }
 
@@ -335,60 +362,57 @@ pub fn message_reference_type_to_int(value: MessageReferenceType) -> Int {
   case value {
     DefaultReference -> 0
     ForwardReference -> 1
-    UnknownReference(other) -> other
   }
 }
 
 pub fn message_reference_type_decoder() -> Decoder(MessageReferenceType) {
-  wire.integer() |> decode.map(message_reference_type_from_int)
+  wire.strict(
+    message_reference_type_from_int,
+    DefaultReference,
+    "MessageReferenceType",
+  )
 }
 
 pub fn message_reference_type_to_json(value: MessageReferenceType) -> Json {
   json.int(message_reference_type_to_int(value))
 }
 
-pub fn sticker_format_from_int(value: Int) -> StickerFormat {
+pub fn sticker_format_from_int(value: Int) -> Option(StickerFormat) {
   case value {
-    1 -> PngSticker
-    2 -> ApngSticker
-    3 -> LottieSticker
-    4 -> GifSticker
-    other -> UnknownStickerFormat(other)
+    1 -> Some(PngSticker)
+    2 -> Some(ApngSticker)
+    3 -> Some(LottieSticker)
+    4 -> Some(GifSticker)
+    _ -> None
   }
 }
 
-/// The exact inverse of `sticker_format_from_int`: a value this build does not
-/// know still goes back out as itself.
 pub fn sticker_format_to_int(value: StickerFormat) -> Int {
   case value {
     PngSticker -> 1
     ApngSticker -> 2
     LottieSticker -> 3
     GifSticker -> 4
-    UnknownStickerFormat(other) -> other
   }
 }
 
-pub fn reaction_type_from_int(value: Int) -> ReactionType {
+pub fn reaction_type_from_int(value: Int) -> Option(ReactionType) {
   case value {
-    0 -> NormalReaction
-    1 -> BurstReaction
-    other -> UnknownReactionType(other)
+    0 -> Some(NormalReaction)
+    1 -> Some(BurstReaction)
+    _ -> None
   }
 }
 
-/// The exact inverse of `reaction_type_from_int`: a value this build does not
-/// know still goes back out as itself.
 pub fn reaction_type_to_int(value: ReactionType) -> Int {
   case value {
     NormalReaction -> 0
     BurstReaction -> 1
-    UnknownReactionType(other) -> other
   }
 }
 
 pub fn reaction_type_decoder() -> Decoder(ReactionType) {
-  wire.integer() |> decode.map(reaction_type_from_int)
+  wire.strict(reaction_type_from_int, NormalReaction, "ReactionType")
 }
 
 pub type MessageFlags =
@@ -470,9 +494,14 @@ pub fn decoder() -> Decoder(Message) {
   use nonce <- wire.opt_field("nonce", nonce_decoder())
   use pinned <- wire.flag_field("pinned", False)
   use webhook_id <- wire.opt_field("webhook_id", id.decoder())
-  use type_ <- wire.int_field("type", 0)
+  use type_ <- wire.type_field(
+    "type",
+    message_type_from_int,
+    DefaultMessage,
+    "MessageType",
+  )
   use application_id <- wire.opt_field("application_id", id.decoder())
-  use flag_bits <- wire.int_field("flags", 0)
+  use flags <- wire.enum_field("flags", flags.from_int)
   use message_reference <- wire.opt_field(
     "message_reference",
     message_reference_decoder(),
@@ -482,7 +511,7 @@ pub fn decoder() -> Decoder(Message) {
     decode.recursive(decoder),
   )
   use thread <- wire.opt_field("thread", channel.decoder())
-  use components <- wire.list_field("components", component.decoder())
+  use components <- wire.known_list_field("components", component.decoder())
   use sticker_items <- wire.list_field("sticker_items", sticker_item_decoder())
   use position <- wire.opt_field("position", wire.integer())
   decode.success(Message(
@@ -505,9 +534,9 @@ pub fn decoder() -> Decoder(Message) {
     nonce: option.flatten(nonce),
     pinned:,
     webhook_id:,
-    type_: message_type_from_int(type_),
+    type_:,
     application_id:,
-    flags: flags.from_int(flag_bits),
+    flags:,
     message_reference:,
     referenced_message:,
     thread:,
@@ -548,25 +577,26 @@ pub fn nonce_to_json(value: Nonce) -> Json {
 pub fn channel_mention_decoder() -> Decoder(ChannelMention) {
   use id <- decode.field("id", id.decoder())
   use guild_id <- decode.field("guild_id", id.decoder())
-  use type_ <- wire.int_field("type", 0)
+  use type_ <- wire.type_field(
+    "type",
+    channel.channel_type_from_int,
+    channel.GuildText,
+    "ChannelType",
+  )
   use name <- wire.string_field("name", "")
-  decode.success(ChannelMention(
-    id:,
-    guild_id:,
-    type_: channel.channel_type_from_int(type_),
-    name:,
-  ))
+  decode.success(ChannelMention(id:, guild_id:, type_:, name:))
 }
 
 pub fn sticker_item_decoder() -> Decoder(StickerItem) {
   use id <- decode.field("id", id.decoder())
   use name <- wire.string_field("name", "")
-  use format_type <- wire.int_field("format_type", 0)
-  decode.success(StickerItem(
-    id:,
-    name:,
-    format_type: sticker_format_from_int(format_type),
-  ))
+  use format_type <- wire.type_field(
+    "format_type",
+    sticker_format_from_int,
+    PngSticker,
+    "StickerFormat",
+  )
+  decode.success(StickerItem(id:, name:, format_type:))
 }
 
 /// The super-reaction fields are documented as required and are missing from
@@ -599,16 +629,17 @@ pub fn reaction_count_details_decoder() -> Decoder(ReactionCountDetails) {
 }
 
 pub fn message_reference_decoder() -> Decoder(MessageReference) {
-  use type_ <- wire.int_field("type", 0)
+  // Absent means DEFAULT.
+  use type_ <- wire.type_or(
+    "type",
+    message_reference_type_from_int,
+    DefaultReference,
+    "MessageReferenceType",
+  )
   use message_id <- wire.opt_field("message_id", id.decoder())
   use channel_id <- wire.opt_field("channel_id", id.decoder())
   use guild_id <- wire.opt_field("guild_id", id.decoder())
-  decode.success(MessageReference(
-    type_: message_reference_type_from_int(type_),
-    message_id:,
-    channel_id:,
-    guild_id:,
-  ))
+  decode.success(MessageReference(type_:, message_id:, channel_id:, guild_id:))
 }
 
 /// `referenced_message` collapsed to an `Option`.
@@ -1003,17 +1034,21 @@ pub fn edit_entries(edit: Edit) -> List(#(String, Field(Json))) {
     #("content", wire.put(edit.content, json.string)),
     #("embeds", wire.put_list(edit.embeds, embed.to_json)),
     #("flags", wire.put(edit.flags, flags.to_json)),
-    #(
-      "allowed_mentions",
-      mentions.mention_policy(
-        edit.allowed_mentions,
-        content: edit.content,
-        components: edit.components,
-      ),
-    ),
+    #("allowed_mentions", mention_policy(edit)),
     #("components", wire.put_list(edit.components, component.to_json)),
     #("attachments", attachment.attachments_field(edit.attachments)),
   ]
+}
+
+/// The `allowed_mentions` entry for an edit, written only when the edit
+/// touches `content` or `components`, which are what Discord re-parses
+/// mentions from. Sending it otherwise breaks suppressing embeds on somebody
+/// else's message, which Discord refuses it on.
+fn mention_policy(edit: Edit) -> Field(Json) {
+  case field.is_absent(edit.content) && field.is_absent(edit.components) {
+    True -> Absent
+    False -> Present(mentions.to_json(edit.allowed_mentions))
+  }
 }
 
 /// The files the multipart body has to carry, in `files[n]` order.
@@ -1023,12 +1058,8 @@ pub fn edit_files(edit: Edit) -> List(File) {
 
 /// `POST /channels/{c}/messages/bulk-delete`. Two to 100 ids, none older than
 /// 14 days, or Discord rejects the whole batch.
-pub type BulkDelete {
-  BulkDelete(messages: List(id.MessageId))
-}
-
-pub fn bulk_delete_body(payload: BulkDelete) -> Body {
-  body.json([#("messages", json.array(payload.messages, id.to_json))])
+pub fn bulk_delete_body(messages: List(id.MessageId)) -> Body {
+  body.json([#("messages", json.array(messages, id.to_json))])
 }
 
 /// No flags set is an absence, not a zero. Public because a create and an
@@ -1086,9 +1117,9 @@ pub fn list(
 fn cursor_param(cursor: Option(MessageCursor)) -> List(query.Param) {
   case cursor {
     None -> []
-    Some(Around(message)) -> query.one("around", query.snowflake(message))
-    Some(Before(message)) -> query.one("before", query.snowflake(message))
-    Some(After(message)) -> query.one("after", query.snowflake(message))
+    Some(Around(message)) -> query.one("around", message, query.snowflake)
+    Some(Before(message)) -> query.one("before", message, query.snowflake)
+    Some(After(message)) -> query.one("after", message, query.snowflake)
   }
 }
 
@@ -1151,7 +1182,7 @@ pub fn bulk_delete(
 ) -> Call(Nil) {
   rest.post(
     list.append(messages_at(channel), [seg.lit("bulk-delete")]),
-    bulk_delete_body(BulkDelete(messages:)),
+    bulk_delete_body(messages),
     rest.NoContent(Nil),
   )
 }
@@ -1181,47 +1212,16 @@ pub fn custom_emoji_by_id(emoji: id.EmojiId) -> ReactionEmoji {
 
 /// An emoji that came off the wire, from a reaction event or a component.
 pub fn reaction_emoji(emoji: Emoji) -> ReactionEmoji {
-  case emoji.kind {
+  case emoji {
     Unicode(name:) -> unicode_emoji(name)
-    Custom(id: emoji_id, name: Some(name)) -> custom_emoji(emoji_id, name)
-    Custom(id: emoji_id, name: None) -> custom_emoji_by_id(emoji_id)
-  }
-}
-
-/// Which reactions the route asks for. Two variants and not `ReactionType`:
-/// that one has an unknown tail for reading events, and putting a number
-/// Discord does not know on `type` is a 400.
-pub type ReactionKind {
-  Normal
-  Burst
-}
-
-/// A reaction type this route cannot ask for: a kind Discord added after this
-/// build. `wire_value` is the number it sent, which is a value to handle and
-/// not one to put on a query string.
-pub type UnsendableReaction {
-  UnsendableReaction(wire_value: Int)
-}
-
-/// Narrow a reaction type read off a MESSAGE_REACTION_ADD into one this route
-/// can ask for.
-pub fn reaction_kind(
-  value: ReactionType,
-) -> Result(ReactionKind, UnsendableReaction) {
-  case value {
-    NormalReaction -> Ok(Normal)
-    BurstReaction -> Ok(Burst)
-    UnknownReactionType(other) -> Error(UnsendableReaction(other))
+    Custom(id: emoji_id, name: Some(name), ..) -> custom_emoji(emoji_id, name)
+    Custom(id: emoji_id, name: None, ..) -> custom_emoji_by_id(emoji_id)
   }
 }
 
 /// Through this module's own table, so the two numbers are written once.
-fn reaction_type(kind: ReactionKind) -> String {
-  let type_ = case kind {
-    Normal -> NormalReaction
-    Burst -> BurstReaction
-  }
-  int.to_string(reaction_type_to_int(type_))
+fn reaction_type(kind: ReactionType) -> String {
+  int.to_string(reaction_type_to_int(kind))
 }
 
 /// `PUT .../reactions/{emoji}/@me`, as Create Reaction.
@@ -1285,7 +1285,7 @@ pub fn remove_reaction_id(
 pub fn reactions(
   msg: Message,
   emoji: ReactionEmoji,
-  type_ type_: Option(ReactionKind),
+  type_ type_: Option(ReactionType),
   after after: Option(id.UserId),
   limit limit: Option(Int),
 ) -> Call(List(user.User)) {
@@ -1297,7 +1297,7 @@ pub fn reactions_id(
   channel: id.ChannelId,
   message: id.MessageId,
   emoji: ReactionEmoji,
-  type_ type_: Option(ReactionKind),
+  type_ type_: Option(ReactionType),
   after after: Option(id.UserId),
   limit limit: Option(Int),
 ) -> Call(List(user.User)) {

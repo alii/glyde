@@ -332,12 +332,12 @@ pub fn next_reads_a_head_that_is_past_the_bound_but_finished_test() {
   let assert handshake.Head(..) = handshake.next(reader)
 }
 
-pub fn malformed_to_string_names_the_line_test() {
-  assert handshake.malformed_to_string(handshake.HeadNotText)
+pub fn parse_error_to_string_names_the_line_test() {
+  assert handshake.parse_error_to_string(handshake.HeadNotText)
     == "response head is not text"
-  assert handshake.malformed_to_string(handshake.StatusNotHttp("nope"))
+  assert handshake.parse_error_to_string(handshake.StatusNotHttp("nope"))
     == "status line is not HTTP: nope"
-  assert handshake.malformed_to_string(handshake.HeaderWithoutColon("nope"))
+  assert handshake.parse_error_to_string(handshake.HeaderWithoutColon("nope"))
     == "header line has no colon: nope"
 }
 

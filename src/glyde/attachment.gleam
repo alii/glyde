@@ -58,6 +58,29 @@ pub type Placeholder {
   Placeholder(hash: String, version: Int)
 }
 
+/// Read `width` and `height` and pair them. Discord sends both or neither on
+/// an attachment and on embed media, so one helper decodes both places.
+pub fn dimensions_field(
+  next: fn(Option(Dimensions)) -> Decoder(a),
+) -> Decoder(a) {
+  use width <- wire.opt_field("width", wire.integer())
+  use height <- wire.opt_field("height", wire.integer())
+  next(case width, height {
+    Some(width), Some(height) -> Some(Dimensions(width:, height:))
+    _, _ -> None
+  })
+}
+
+/// Read `placeholder` and `placeholder_version` and pair them. Shared by
+/// attachments and embed media.
+pub fn placeholder_field(
+  next: fn(Option(Placeholder)) -> Decoder(a),
+) -> Decoder(a) {
+  use hash <- wire.opt_field("placeholder", decode.string)
+  use version <- wire.int_field("placeholder_version", 1)
+  next(option.map(hash, fn(hash) { Placeholder(hash:, version:) }))
+}
+
 pub type AttachmentFlags =
   Flags(AttachmentFlag)
 
@@ -94,14 +117,12 @@ pub fn decoder() -> Decoder(Attachment) {
   use size <- wire.int_field("size", 0)
   use url <- wire.string_field("url", "")
   use proxy_url <- wire.string_field("proxy_url", "")
-  use height <- wire.opt_field("height", wire.integer())
-  use width <- wire.opt_field("width", wire.integer())
-  use placeholder <- wire.opt_field("placeholder", decode.string)
-  use placeholder_version <- wire.int_field("placeholder_version", 1)
+  use dimensions <- dimensions_field
+  use placeholder <- placeholder_field
   use ephemeral <- wire.flag_field("ephemeral", False)
   use duration_secs <- wire.opt_field("duration_secs", wire.number())
   use waveform <- wire.opt_field("waveform", decode.string)
-  use flag_bits <- wire.int_field("flags", 0)
+  use flags <- wire.enum_field("flags", flags.from_int)
   decode.success(Attachment(
     id:,
     filename:,
@@ -111,17 +132,12 @@ pub fn decoder() -> Decoder(Attachment) {
     size:,
     url:,
     proxy_url:,
-    dimensions: case width, height {
-      Some(width), Some(height) -> Some(Dimensions(width:, height:))
-      _, _ -> None
-    },
-    placeholder: option.map(placeholder, fn(hash) {
-      Placeholder(hash:, version: placeholder_version)
-    }),
+    dimensions:,
+    placeholder:,
     ephemeral:,
     duration_secs:,
     waveform:,
-    flags: flags.from_int(flag_bits),
+    flags:,
   ))
 }
 
@@ -292,8 +308,8 @@ fn bare_name(filename: String) -> String {
 fn kept_to_json(kept: KeptAttachment) -> Json {
   wire.object([
     #("id", Present(id.to_json(kept.id))),
-    #("description", opt_text(kept.description)),
-    #("title", opt_text(kept.title)),
+    #("description", wire.put(wire.opt(kept.description), json.string)),
+    #("title", wire.put(wire.opt(kept.title), json.string)),
   ])
 }
 
@@ -303,8 +319,8 @@ fn file_to_json(a_file: File, index: Int) -> Json {
     // for a new upload in its own example.
     #("id", Present(json.int(index))),
     #("filename", Present(json.string(wire_filename(a_file)))),
-    #("description", opt_text(a_file.description)),
-    #("title", opt_text(a_file.title)),
+    #("description", wire.put(wire.opt(a_file.description), json.string)),
+    #("title", wire.put(wire.opt(a_file.title), json.string)),
     // Both keys or neither: half a voice message is a 400.
     #("duration_secs", case a_file.voice {
       Some(Voice(duration_secs:, ..)) ->
@@ -316,11 +332,4 @@ fn file_to_json(a_file: File, index: Int) -> Json {
       None -> Absent
     }),
   ])
-}
-
-fn opt_text(value: Option(String)) -> Field(Json) {
-  case value {
-    Some(string) -> Present(json.string(string))
-    None -> Absent
-  }
 }

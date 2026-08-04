@@ -4,7 +4,7 @@ import glyde/gateway_info.{
   type GatewayBot, GatewayBot, GatewayInfo, Open, SessionStartLimit, Spent,
 }
 import glyde/identify_queue.{Deny, Request}
-import glyde/internal/url
+import glyde/internal/host
 import glyde/rest
 
 /// A real `GET /gateway/bot` response for a one-shard bot.
@@ -16,8 +16,8 @@ fn parse_bot(text: String) -> Result(GatewayBot, json.DecodeError) {
   json.parse(text, gateway_info.bot_decoder())
 }
 
-fn host(text: String) -> url.Host {
-  let assert Ok(host) = url.host_of(text)
+fn host(text: String) -> host.Host {
+  let assert Ok(host) = host.host_of(text)
   host
 }
 

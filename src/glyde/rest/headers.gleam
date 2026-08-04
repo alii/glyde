@@ -46,33 +46,10 @@ pub type BodyEvidence {
   NoBody
 }
 
-/// What one response said about a bucket, in the limiter's own shape so the
-/// crossing is a hand-over and not a copy. Build it as `limiter.Counters`.
-pub type RateLimit =
-  limiter.Counters
-
-/// What one response taught us.
-pub type Outcome {
-  /// A response carrying the usual `x-ratelimit-*` headers.
-  Learned(RateLimit)
-
-  Throttled(retry_after_ms: Int, scope: Scope, bucket: Option(String))
-
-  /// A refusal that spends the invalid-request budget. Named and not a status,
-  /// so no other status can be counted against it.
-  Rejected(why: RejectedWhy)
-
-  /// Anything else, including transport failure. Frees the bucket and teaches
-  /// the limiter nothing.
-  Opaque
-}
-
-/// The two statuses Discord counts against the invalid-request budget: 401 and
-/// 403.
-pub type RejectedWhy {
-  Unauthorized
-  Forbidden
-}
+/// What one response taught us. The limiter's own type, so `outcome` hands its
+/// answer straight to `limiter.Settled` with no crossing.
+pub type Outcome =
+  limiter.Outcome
 
 /// Our own number, for a 429 carrying neither the `retry-after` header nor the
 /// body field.
@@ -95,35 +72,14 @@ pub fn outcome(
     429 -> throttled(headers, body)
 
     // Both count against the invalid-request budget.
-    401 -> Rejected(Unauthorized)
-    403 -> Rejected(Forbidden)
+    401 -> limiter.Rejected(limiter.Unauthorized)
+    403 -> limiter.Rejected(limiter.Forbidden)
 
     _ ->
       case rate_limit(headers) {
-        Some(rate) -> Learned(rate)
-        None -> Opaque
+        Some(rate) -> limiter.Learned(rate)
+        None -> limiter.Opaque
       }
-  }
-}
-
-/// What `limiter.Settled` takes. The limiter is a pure state machine with no
-/// idea what a header is, so the crossing lives here, on the wire side.
-pub fn to_limiter_outcome(outcome: Outcome) -> limiter.Outcome {
-  case outcome {
-    Learned(rate) -> limiter.Learned(rate)
-    Throttled(retry_after_ms:, scope:, bucket:) ->
-      limiter.Throttled(retry_after_ms:, scope:, bucket:)
-    Rejected(why:) -> limiter.Rejected(status: rejected_status(why))
-    Opaque -> limiter.Opaque
-  }
-}
-
-/// The status Discord sent. The limiter only counts the refusal, so this is
-/// for a host reading the outcome back.
-pub fn rejected_status(why: RejectedWhy) -> Int {
-  case why {
-    Unauthorized -> 401
-    Forbidden -> 403
   }
 }
 
@@ -202,7 +158,7 @@ fn nonzero(grapheme: String) -> Bool {
 
 /// `None` when no counter arrived at all, which is not the same as a bucket
 /// with nothing left in it.
-fn rate_limit(headers: List(Header)) -> Option(RateLimit) {
+fn rate_limit(headers: List(Header)) -> Option(limiter.Counters) {
   let rate =
     limiter.Counters(
       bucket: header(headers, "x-ratelimit-bucket"),
@@ -221,7 +177,7 @@ fn rate_limit(headers: List(Header)) -> Option(RateLimit) {
 
 fn throttled(headers: List(Header), body: String) -> Outcome {
   let #(said_wait, said) = read_body(body)
-  Throttled(
+  limiter.Throttled(
     retry_after_ms: wait(headers, said_wait),
     scope: resolve_scope(headers, said),
     bucket: header(headers, "x-ratelimit-bucket"),
@@ -265,7 +221,7 @@ fn millis(seconds: Float) -> Option(Int) {
 /// only ever writes it as `false` there.
 fn rate_limit_body() -> Decoder(#(Float, Bool)) {
   use retry_after <- decode.field("retry_after", wire.number())
-  use global <- decode.optional_field("global", False, decode.bool)
+  use global <- wire.flag_field("global", False)
   decode.success(#(retry_after, global))
 }
 
@@ -322,8 +278,9 @@ fn delay(headers: List(Header), name: String) -> Option(Int) {
 }
 
 /// One header by name, `None` when it did not arrive. Adapters hand names over
-/// in any case, so `name` must be lowercase.
+/// in any case, so both sides are lowercased for the match.
 pub fn header(headers: List(Header), name: String) -> Option(String) {
+  let name = string.lowercase(name)
   case list.find(headers, fn(pair) { string.lowercase(pair.0) == name }) {
     Ok(#(_, value)) -> Some(value)
     Error(_) -> None

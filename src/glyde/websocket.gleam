@@ -1,7 +1,7 @@
 //// A WebSocket client.
 ////
 //// ```gleam
-//// let assert Ok(bye) = websocket.close_code(1000)
+//// let assert Ok(bye) = sendcode.new(1000)
 ////
 //// let socket = websocket.open("wss://gateway.discord.gg/?v=10")
 //// let socket = websocket.send_text(socket, identify)
@@ -27,9 +27,11 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import glyde/internal/websocket/erlang
 import glyde/transport.{
-  type Event, BinaryMessage, Closed, Failed, Opened, Refused, TextMessage,
+  type CloseCause, type Event, BinaryMessage, Closed, Opened, TextMessage,
+  TransportFailed, UpgradeRefused,
 }
 import glyde/websocket/frame
+import glyde/websocket/sendcode
 
 /// Milliseconds. Our number: Discord's gateway answers in well under a second.
 pub const dial_timeout: Int = 10_000
@@ -52,29 +54,19 @@ pub opaque type Socket {
   /// Open, with `Opened` already reported.
   Reading(live: erlang.Socket)
 
-  /// The transport is down and `Closed` has not gone out. Covers a dial that
-  /// never came up, a write that failed and a close of our own; `trouble`,
-  /// when there is one, goes out just before the `Closed`.
-  Ending(trouble: Option(Event))
+  /// The transport is down after a close of our own. `Closed` alone is owed.
+  EndingClean
+
+  /// The transport is down because a dial or a write failed. One `Closed`
+  /// carrying `TransportFailed` is owed.
+  EndingFailed(reason: String)
+
+  /// The peer answered the upgrade with an HTTP status instead of switching.
+  /// One `Closed` carrying `UpgradeRefused` is owed.
+  EndingRefused(status: Int, reason: String)
 
   /// `Closed` has been reported. Nothing further will happen.
   Done
-}
-
-/// A close code a client is allowed to put on the wire, and the only thing
-/// `close` accepts: a code it would have turned down cannot reach it.
-pub opaque type CloseCode {
-  CloseCode(number: Int)
-}
-
-/// 1000, or anything from 3000 to 4999, which is what RFC 6455 lets a client
-/// send. Discord uses 1000 to end a session and 4000 to keep it resumable.
-/// The `Error` hands the number back.
-pub fn close_code(number: Int) -> Result(CloseCode, Int) {
-  case number == 1000 || { number >= 3000 && number <= 4999 } {
-    True -> Ok(CloseCode(number))
-    False -> Error(number)
-  }
 }
 
 /// Dial a `wss` URL.
@@ -93,17 +85,13 @@ pub fn open(url: String) -> Socket {
 
   case dialled {
     Ok(live) -> Dialled(live)
-    Error(error) -> Ending(Some(trouble(error)))
-  }
-}
-
-/// A refused upgrade carries the status, because the gateway halts on a 401
-/// and waits on a 429. Everything else is only words.
-fn trouble(error: erlang.Error) -> Event {
-  let reason = erlang.error_to_string(error)
-  case erlang.refusal_status(error) {
-    Ok(status) -> Refused(status:, reason:)
-    Error(Nil) -> Failed(reason)
+    Error(error) -> {
+      let reason = erlang.error_to_string(error)
+      case erlang.refusal_status(error) {
+        Ok(status) -> EndingRefused(status:, reason:)
+        Error(Nil) -> EndingFailed(reason)
+      }
+    }
   }
 }
 
@@ -111,7 +99,7 @@ fn trouble(error: erlang.Error) -> Event {
 /// platform raised under it. It behaves like any other failed dial: no writes,
 /// and the reason out of the first `poll`.
 pub fn failed(reason: String) -> Socket {
-  Ending(Some(Failed(reason)))
+  EndingFailed(reason)
 }
 
 /// Write one text frame. A socket whose write failed comes back ending, so
@@ -119,8 +107,8 @@ pub fn failed(reason: String) -> Socket {
 pub fn send_text(socket: Socket, text: String) -> Socket {
   case socket {
     Dialled(live) | Reading(live) ->
-      wrote(socket, live, erlang.send_text(live, text, mask()))
-    Ending(_) | Done -> socket
+      wrote(socket, erlang.send_text(live, text, mask()))
+    EndingClean | EndingFailed(..) | EndingRefused(..) | Done -> socket
   }
 }
 
@@ -128,8 +116,8 @@ pub fn send_text(socket: Socket, text: String) -> Socket {
 pub fn send_bytes(socket: Socket, bytes: BitArray) -> Socket {
   case socket {
     Dialled(live) | Reading(live) ->
-      wrote(socket, live, erlang.send_bytes(live, bytes, mask()))
-    Ending(_) | Done -> socket
+      wrote(socket, erlang.send_bytes(live, bytes, mask()))
+    EndingClean | EndingFailed(..) | EndingRefused(..) | Done -> socket
   }
 }
 
@@ -139,13 +127,17 @@ pub fn send_bytes(socket: Socket, bytes: BitArray) -> Socket {
 ///
 /// The reason is cut to 123 bytes. Closing a socket that is already ending or
 /// finished leaves it alone.
-pub fn close(socket: Socket, code: CloseCode, reason: String) -> Socket {
+pub fn close(
+  socket: Socket,
+  code: sendcode.SendCode,
+  reason: String,
+) -> Socket {
   case socket {
     Dialled(live) | Reading(live) -> {
-      erlang.close(live, code.number, reason, mask())
-      Ending(None)
+      erlang.close(live, sendcode.to_int(code), reason, mask())
+      EndingClean
     }
-    Ending(_) | Done -> socket
+    EndingClean | EndingFailed(..) | EndingRefused(..) | Done -> socket
   }
 }
 
@@ -156,9 +148,9 @@ pub fn drop(socket: Socket) -> Socket {
   case socket {
     Dialled(live) | Reading(live) -> {
       erlang.drop(live)
-      Ending(None)
+      EndingClean
     }
-    Ending(_) | Done -> socket
+    EndingClean | EndingFailed(..) | EndingRefused(..) | Done -> socket
   }
 }
 
@@ -167,7 +159,7 @@ pub fn drop(socket: Socket) -> Socket {
 pub fn live(socket: Socket) -> Bool {
   case socket {
     Dialled(_) | Reading(_) -> True
-    Ending(_) | Done -> False
+    EndingClean | EndingFailed(..) | EndingRefused(..) | Done -> False
   }
 }
 
@@ -175,7 +167,11 @@ pub fn live(socket: Socket) -> Bool {
 pub fn finished(socket: Socket) -> Bool {
   case socket {
     Done -> True
-    Dialled(_) | Reading(_) | Ending(_) -> False
+    Dialled(_)
+    | Reading(_)
+    | EndingClean
+    | EndingFailed(..)
+    | EndingRefused(..) -> False
   }
 }
 
@@ -199,7 +195,12 @@ pub fn poll(socket: Socket, timeout timeout: Int) -> #(Socket, List(Event)) {
   case socket {
     Done -> #(socket, [])
 
-    Ending(trouble) -> ended(1006, "", owed(trouble))
+    EndingClean -> ended(1006, "", None)
+
+    EndingFailed(reason) -> ended(1006, "", Some(TransportFailed(reason)))
+
+    EndingRefused(status:, reason:) ->
+      ended(1006, "", Some(UpgradeRefused(status:, detail: reason)))
 
     Dialled(live) -> #(Reading(live), [Opened])
 
@@ -213,10 +214,10 @@ fn read(live: erlang.Socket, timeout: Int) -> #(Socket, List(Event)) {
 
     // The peer went away without a close frame, which is what 1006 is for.
     // `Dropped` has already torn the transport down.
-    erlang.Dropped(erlang.Closed) -> ended(1006, "", [])
+    erlang.Dropped(erlang.Closed) -> ended(1006, "", None)
 
     erlang.Dropped(error) ->
-      ended(1006, "", [Failed(erlang.error_to_string(error))])
+      ended(1006, "", Some(TransportFailed(erlang.live_error_to_string(error))))
 
     erlang.Arrived(live, message) ->
       case message {
@@ -229,7 +230,7 @@ fn read(live: erlang.Socket, timeout: Int) -> #(Socket, List(Event)) {
         // write, so the reason is the write's and not the next read's.
         frame.PingMessage(payload) -> {
           let sent = erlang.send_pong(live, payload, mask())
-          #(wrote(Reading(live), live, sent), [])
+          #(wrote(Reading(live), sent), [])
         }
 
         // Nothing here sends a ping, so any pong is the peer's business.
@@ -249,12 +250,12 @@ fn closing(
   case body {
     frame.CloseCode(code:, reason:) -> {
       erlang.close(live, 1000, "", mask())
-      ended(code, reason, [])
+      ended(code, reason, None)
     }
 
     frame.NoCloseCode -> {
       erlang.close(live, 1000, "", mask())
-      ended(1005, "", [])
+      ended(1005, "", None)
     }
 
     // RFC 6455 calls a non-UTF-8 reason a protocol error, so the answer is
@@ -262,13 +263,13 @@ fn closing(
     // so it is reported rather than thrown away with the reason.
     frame.UnreadableReason(code) -> {
       erlang.close(live, 1002, "", mask())
-      ended(code, "", [Failed("close reason is not utf-8")])
+      ended(code, "close reason is not utf-8", None)
     }
 
     // Too few bytes for a code, which RFC 6455 also calls a protocol error.
     frame.TruncatedCloseBody -> {
       erlang.close(live, 1002, "", mask())
-      ended(1006, "", [Failed("close frame carries no readable code")])
+      ended(1006, "close frame carries no readable code", None)
     }
   }
 }
@@ -276,34 +277,18 @@ fn closing(
 fn ended(
   code: Int,
   reason: String,
-  before: List(Event),
+  cause: Option(CloseCause),
 ) -> #(Socket, List(Event)) {
-  #(Done, list.append(before, [Closed(code:, reason:)]))
+  #(Done, [Closed(code:, reason:, cause:)])
 }
 
-/// The ending's own event goes out ahead of the `Closed` when there is one.
-fn owed(trouble: Option(Event)) -> List(Event) {
-  case trouble {
-    Some(event) -> [event]
-    None -> []
-  }
-}
-
-/// A write that fails leaves nothing to read, so the transport goes down here
-/// rather than at the next read timeout, and the reason waits for `poll`. A
-/// write that went out leaves the socket as it was, `Opened` still owed if it
-/// was owed.
-fn wrote(
-  socket: Socket,
-  live: erlang.Socket,
-  sent: Result(Nil, erlang.Error),
-) -> Socket {
+/// A write that fails has already torn the transport down, so the reason waits
+/// for `poll`. A write that went out leaves the socket as it was, `Opened`
+/// still owed if it was owed.
+fn wrote(socket: Socket, sent: Result(Nil, erlang.LiveError)) -> Socket {
   case sent {
     Ok(Nil) -> socket
-    Error(error) -> {
-      erlang.drop(live)
-      Ending(Some(Failed(erlang.error_to_string(error))))
-    }
+    Error(error) -> EndingFailed(erlang.live_error_to_string(error))
   }
 }
 

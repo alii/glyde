@@ -381,14 +381,22 @@ fn utf8_width(codepoint: Int) -> Int {
   }
 }
 
-/// A message being put back together. Unbounded: a caller that wants a cap on
-/// endless fragmenting measures `Fragmented`'s payload itself.
+/// A message being put back together. Unbounded; `assembly_bytes` gives the
+/// held size for a caller that wants to cap it.
 pub type Assembly {
   Idle
 
   /// `text` is taken from the first fragment, since continuations no longer
   /// say.
   Fragmented(text: Bool, payload: BitArray)
+}
+
+/// Bytes held in a partly assembled message.
+pub fn assembly_bytes(assembly: Assembly) -> Int {
+  case assembly {
+    Idle -> 0
+    Fragmented(payload:, ..) -> bit_array.byte_size(payload)
+  }
 }
 
 /// A complete message, or a control frame, which is always complete.

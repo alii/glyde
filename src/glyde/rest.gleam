@@ -16,18 +16,17 @@
 //// ```
 
 import gleam/bit_array
-import gleam/bool
 import gleam/dynamic/decode.{type Decoder}
 import gleam/http.{type Header, Delete, Get, Https, Patch, Post, Put}
-import gleam/http/request.{type Request, Request} as _
+import gleam/http/request.{type Request, Request}
 import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
-import glyde/internal/url
+import glyde/internal/percent
 import glyde/internal/version
-import glyde/rest/body.{type Body, type Boundary, type File, type Wire}
+import glyde/rest/body.{type Body, type Boundary, type Wire}
 import glyde/rest/error.{type ApiError}
 import glyde/rest/query.{type Param}
 import glyde/rest/route.{
@@ -69,7 +68,7 @@ pub fn bearer(token: String) -> Token {
 }
 
 /// No `Authorization` header. The webhook and interaction routes drop theirs
-/// per call, so this is for a route glyde does not wrap.
+/// from the segments, so this is for a route glyde does not wrap.
 pub fn unauthenticated() -> Token {
   Token(fn() { None })
 }
@@ -112,19 +111,14 @@ pub opaque type Call(a) {
   )
 }
 
-/// Where a call's credential comes from. Only the endpoint knows, so the
-/// answer rides on the `Call` and not on the one `Config` a bot has.
+/// Where a call's credential comes from. Derived from the segments in `build`:
+/// a `seg.webhook` or `seg.credential` in the path means `InPath`, so a route
+/// that carries a path secret cannot forget to drop the bot token.
 type Auth {
   FromConfig
   /// The credential is already a path segment. Sending the bot token as well
   /// would make a 401 ambiguous between the two.
   InPath
-}
-
-/// For the webhook and interaction routes: send no `Authorization` header,
-/// whatever the `Config` holds. A 401 then means that path credential.
-pub fn path_authenticated(call: Call(a)) -> Call(a) {
-  Call(..call, auth: InPath)
 }
 
 pub type Expect(a) {
@@ -164,16 +158,12 @@ fn build(
   content: Body,
   expect: Expect(a),
 ) -> Call(a) {
-  let seg.Resolved(path:, route:) = seg.resolve(method, segments)
-  Call(
-    route:,
-    path:,
-    query: [],
-    reason: None,
-    body: content,
-    expect:,
-    auth: FromConfig,
-  )
+  let seg.Resolved(path:, route:, in_path_auth:) = seg.resolve(method, segments)
+  let auth = case in_path_auth {
+    True -> InPath
+    False -> FromConfig
+  }
+  Call(route:, path:, query: [], reason: None, body: content, expect:, auth:)
 }
 
 /// Add query parameters. They accumulate rather than replace, so a repeated
@@ -192,22 +182,6 @@ pub fn reason(call: Call(a), why: String) -> Call(a) {
   case why {
     "" -> Call(..call, reason: None)
     _ -> Call(..call, reason: Some(why))
-  }
-}
-
-/// Add a file, turning the body multipart. Appends, because a part is named
-/// `files[n]` from its position and prepending would renumber the rest.
-///
-/// The other two bodies come back unchanged, and neither can lose a file that
-/// way: `body.JsonArray` is only ever a bulk replace, which takes no uploads,
-/// and a `body.Finished` payload already names the parts it carries, so an
-/// extra one would have no `attachments` entry to be matched against.
-pub fn attach(call: Call(a), file: File) -> Call(a) {
-  case call.body {
-    body.NoBody -> Call(..call, body: body.Form(payload: [], files: [file]))
-    body.Form(payload:, files:) ->
-      Call(..call, body: body.Form(payload:, files: list.append(files, [file])))
-    body.Finished(..) | body.JsonArray(_) -> call
   }
 }
 
@@ -243,6 +217,12 @@ pub fn request(config: Config, call: Call(a)) -> Request(Wire) {
   )
 }
 
+/// `request` with the body already flattened to bytes, for an HTTP client that
+/// takes `BitArray`. Saves the caller reaching into `body.to_bits`.
+pub fn request_bytes(config: Config, call: Call(a)) -> Request(BitArray) {
+  request.map(request(config, call), body.to_bits)
+}
+
 /// Interpret a response with the decoder the `Call` carries. Success is the
 /// whole 2xx range: 201 and 204 are everyday Discord answers.
 pub fn response(
@@ -251,24 +231,33 @@ pub fn response(
   headers headers: List(Header),
   body body: BitArray,
 ) -> Result(a, Failure) {
-  // Discord answers in UTF-8 everywhere, so a body that is not text came from
-  // something in between. Reading it as an empty one would report a proxy's
-  // binary page as a JSON decode failure.
-  use text <- result.try(case bit_array.to_string(body) {
+  case status >= 200 && status < 300, call.expect {
+    // A NoContent call never reads its body, so do not let one fail on it.
+    True, NoContent(value) -> Ok(value)
+    True, Decoded(decoder) -> {
+      use text <- result.try(read_body(status, headers, body))
+      json.parse(text, decoder)
+      |> result.map_error(error.malformed(_, text))
+    }
+    False, _ -> {
+      use text <- result.try(read_body(status, headers, body))
+      Error(error.from_response(status:, headers:, body: text))
+    }
+  }
+}
+
+/// Discord answers in UTF-8 everywhere, so a body that is not text came from
+/// something in between. Reading it as an empty one would report a proxy's
+/// binary page as a JSON decode failure.
+fn read_body(
+  status: Int,
+  headers: List(Header),
+  body: BitArray,
+) -> Result(String, Failure) {
+  case bit_array.to_string(body) {
     Ok(text) -> Ok(text)
     Error(Nil) ->
       Error(error.not_text(status:, headers:, bytes: bit_array.byte_size(body)))
-  })
-  use <- bool.lazy_guard(status < 200 || status >= 300, fn() {
-    Error(error.from_response(status:, headers:, body: text))
-  })
-  case call.expect {
-    NoContent(value) -> Ok(value)
-    Decoded(decoder) ->
-      json.parse(text, decoder)
-      |> result.map_error(fn(failure) {
-        error.Malformed(error.DecodeFailure(error: failure, raw: text))
-      })
   }
 }
 
@@ -287,7 +276,7 @@ fn headers_for(
     Some(#("user-agent", config.user_agent)),
     option.map(content_type, fn(value) { #("content-type", value) }),
     option.map(call.reason, fn(why) {
-      #("x-audit-log-reason", url.percent_encode(why))
+      #("x-audit-log-reason", percent.encode(why))
     }),
   ]
   |> list.filter_map(option.to_result(_, Nil))

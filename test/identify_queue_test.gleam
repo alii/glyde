@@ -439,7 +439,7 @@ pub fn no_arrival_order_buys_a_second_slot_test() {
       once && paid
     })
 
-  assert verdict == testing.Held
+  assert verdict == Ok(testing.Held)
 }
 
 /// Which shard wins a bucket depends on who asked first, and should. Which

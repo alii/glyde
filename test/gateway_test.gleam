@@ -7,17 +7,22 @@ import glyde/gateway.{
   ArmTimer, Beat, Budget, CancelTimer, Close, Command, Conn, Dead, Dialing, Drop,
   Emit, Fired, Greeting, Identify, Identifying, Inflate, Inflated, Live, Note,
   Open, OpenFailed, Queued, ReleaseIdentifySlot, RequestIdentifySlot, Resume,
-  Resuming, Send, Session, Shard, Stamp, Start, Step, Stop, Stopped, Waiting,
+  Resuming, Send, Session, Stamp, Start, Step, Stop, Stopped, Waiting, attempts,
+  inbound, pending, phase, shard_config, shard_rng, stamps, with_attempts,
+  with_inbound, with_pending, with_phase, with_rng,
 }
 import glyde/gateway/close
 import glyde/gateway/command
 import glyde/gateway/frame as gateway_frame
+import glyde/gateway/identify as gateway_identify
 import glyde/gateway/presence
 import glyde/gateway/ready
 import glyde/gateway/reassembly
 import glyde/id
 import glyde/intents
 import glyde/rng
+import glyde/token
+import glyde/websocket/sendcode
 
 const interval = 41_250
 
@@ -25,7 +30,7 @@ const handshake_ms = 30_000
 
 /// The properties are pinned so an IDENTIFY assertion can name them.
 fn conf() -> gateway.Config {
-  let base = gateway.config(token: "tok", intents: intents.none())
+  let base = gateway.config(token: token.new("tok"), intents: intents.none())
   gateway.Config(
     ..base,
     properties: gateway.properties(
@@ -43,7 +48,7 @@ fn shard() -> Shard {
 /// `Fixed` never advances, so every jitter in a test driven with it is the
 /// bottom of its range and every expected delay is a number you can write down.
 fn pinned(shard: Shard, value: Int) -> Shard {
-  Shard(..shard, rng: rng.fixed(value))
+  with_rng(shard, rng.fixed(value))
 }
 
 fn drive(shard: Shard, inputs: List(Input)) -> Shard {
@@ -52,10 +57,10 @@ fn drive(shard: Shard, inputs: List(Input)) -> Shard {
 
 fn stamp_of(shard: Shard, timer: gateway.Timer) -> Stamp {
   case timer {
-    gateway.Heartbeat -> shard.stamps.heartbeat
-    gateway.Handshake -> shard.stamps.handshake
-    gateway.Reconnect -> shard.stamps.reconnect
-    gateway.Commands -> shard.stamps.commands
+    gateway.Heartbeat -> stamps(shard).heartbeat
+    gateway.Handshake -> stamps(shard).handshake
+    gateway.Reconnect -> stamps(shard).reconnect
+    gateway.Commands -> stamps(shard).commands
   }
 }
 
@@ -211,7 +216,7 @@ fn plain(outputs: List(Output)) -> List(Output) {
 fn sends(outputs: List(Output)) -> List(String) {
   list.filter_map(outputs, fn(output) {
     case output {
-      Send(payload) -> Ok(payload.text)
+      Send(payload) -> Ok(gateway_frame.outbound_text(payload))
       _ -> Error(Nil)
     }
   })
@@ -220,7 +225,7 @@ fn sends(outputs: List(Output)) -> List(String) {
 fn closes(outputs: List(Output)) -> List(Int) {
   list.filter_map(outputs, fn(output) {
     case output {
-      Close(code) -> Ok(code)
+      Close(code) -> Ok(sendcode.to_int(code))
       _ -> Error(Nil)
     }
   })
@@ -264,7 +269,7 @@ pub fn start_arms_an_immediate_dial_test() {
       CancelTimer(gateway.Commands),
       ArmTimer(gateway.Reconnect, 0, Stamp(3)),
     ]
-  assert shard.phase == Waiting(Identify)
+  assert phase(shard) == Waiting(Identify)
 }
 
 pub fn start_is_ignored_once_running_test() {
@@ -285,7 +290,7 @@ pub fn the_dial_bumps_the_connection_and_arms_the_watchdog_test() {
       Open(Conn(5), gateway.default_host(), "/?v=10&encoding=json"),
       ArmTimer(gateway.Handshake, handshake_ms, Stamp(6)),
     ]
-  assert shard.phase == Dialing(Identify)
+  assert phase(shard) == Dialing(Identify)
   assert gateway.conn(shard) == Conn(5)
 }
 
@@ -295,8 +300,8 @@ pub fn opening_the_socket_changes_nothing_else_test() {
   let Step(shard: after, outputs:) =
     gateway.step(shard, gateway.Opened(gateway.conn(shard)))
   assert outputs == []
-  assert after.phase == Greeting(Identify)
-  assert after.stamps == shard.stamps
+  assert phase(after) == Greeting(Identify)
+  assert stamps(after) == stamps(shard)
 }
 
 /// HELLO on a fresh connection cancels the watchdog, jitters the first beat
@@ -311,7 +316,7 @@ pub fn hello_queues_for_an_identify_slot_test() {
       RequestIdentifySlot(Conn(5)),
       Note(gateway.AwaitingIdentifySlot),
     ]
-  assert after.phase
+  assert phase(after)
     == Queued(Beat(interval_ms: interval, unacked: 0, quiet: False))
 }
 
@@ -338,7 +343,7 @@ pub fn hello_with_a_session_resumes_without_a_slot_test() {
     ]
   assert list.contains(outputs, RequestIdentifySlot(Conn(5))) == False
   assert armed(outputs, gateway.Handshake) == [handshake_ms]
-  assert after.phase
+  assert phase(after)
     == Resuming(Beat(interval_ms: interval, unacked: 0, quiet: False), stored())
 }
 
@@ -379,14 +384,14 @@ pub fn the_slot_grant_sends_identify_test() {
       "{\"op\":2,\"d\":{\"token\":\"tok\",\"properties\":{\"os\":\"test\",\"browser\":\"glyde\",\"device\":\"glyde\"},\"compress\":false,\"large_threshold\":50,\"shard\":[0,1],\"intents\":0}}",
     ]
   assert armed(outputs, gateway.Handshake) == [handshake_ms]
-  assert after.phase
+  assert phase(after)
     == Identifying(Beat(interval_ms: interval, unacked: 0, quiet: False))
 }
 
 /// READY is the end of the handshake: the watchdog and the reconnect both stop,
 /// the slot goes back, and the ladder resets.
 pub fn ready_goes_live_test() {
-  let shard = Shard(..identifying(), attempts: 4)
+  let shard = with_attempts(identifying(), 4)
   let Step(shard: after, outputs:) = frame(shard, ready_at(1))
 
   assert plain(outputs)
@@ -403,8 +408,8 @@ pub fn ready_goes_live_test() {
       )),
     ]
   assert dispatched(outputs) == [#("READY", 1)]
-  assert after.attempts == 0
-  assert after.phase
+  assert attempts(after) == 0
+  assert phase(after)
     == Live(
       Beat(interval_ms: interval, unacked: 0, quiet: False),
       Session(id: "sess", resume_host: resume_host(), seq: 1),
@@ -442,8 +447,8 @@ pub fn an_unreadable_ready_reconnects_and_reidentifies_test() {
   let Step(shard: after, outputs:) =
     frame(shard, "{\"op\":0,\"s\":1,\"t\":\"READY\",\"d\":{}}")
 
-  assert closes(outputs) == [close.code(close.FreshIdentify)]
-  assert after.phase == Waiting(Identify)
+  assert closes(outputs) == [4000]
+  assert phase(after) == Waiting(Identify)
   assert gateway.session(after) == None
   assert whys(outputs) == [gateway.HandshakeUnreadable]
   assert list.any(outputs, fn(output) {
@@ -564,7 +569,7 @@ pub fn the_echo_of_our_own_close_is_not_a_new_failure_test() {
   let shard = live()
   let old = gateway.conn(shard)
   let torn = frame(shard, server_reconnect())
-  assert closes(torn.outputs) == [close.code(close.Reconnect)]
+  assert closes(torn.outputs) == [4000]
   assert list.length(reconnects(torn.outputs)) == 1
 
   let Step(shard: after, outputs:) =
@@ -586,7 +591,7 @@ pub fn a_late_resumed_cannot_cancel_the_reconnect_test() {
       gateway.Frame(old, "{\"op\":0,\"s\":9,\"t\":\"RESUMED\",\"d\":{}}"),
     )
   assert outputs == [Note(gateway.Ignored(gateway.StaleConn(old)))]
-  assert after.phase == torn.phase
+  assert phase(after) == phase(torn)
 }
 
 /// Two detectors reporting one death, in every order they can arrive in.
@@ -608,16 +613,16 @@ pub fn one_death_produces_exactly_one_reconnect_test() {
       })
     assert list.length(reconnects(seen)) == 1
     assert list.length(closes(seen)) <= 1
-    assert final.attempts == 1
+    assert attempts(final) == 1
   })
 }
 
 pub fn a_terminal_shard_absorbs_everything_test() {
   let dead = drive(live(), [gateway.Closed(Conn(5), Some(4014))])
-  assert dead.phase == Dead(close.DisallowedIntents)
+  assert phase(dead) == Dead(close.DisallowedIntents)
 
   let stopped = drive(live(), [Stop])
-  assert stopped.phase == Stopped
+  assert phase(stopped) == Stopped
 
   let inputs = [
     Start,
@@ -643,13 +648,10 @@ pub fn the_first_tick_of_a_connection_always_sends_test() {
   let Step(shard: after, outputs:) = fire(shard, gateway.Heartbeat)
   assert outputs
     == [
-      Send(gateway_frame.Outbound(
-        op: gateway_frame.OpHeartbeat,
-        text: "{\"op\":1,\"d\":1}",
-      )),
+      Send(gateway_frame.heartbeat(Some(1))),
       ArmTimer(gateway.Heartbeat, interval, Stamp(13)),
     ]
-  assert after.phase
+  assert phase(after)
     == Live(
       Beat(interval_ms: interval, unacked: 1, quiet: True),
       Session("sess", resume_host(), 1),
@@ -667,7 +669,7 @@ pub fn later_beats_use_the_raw_interval_test() {
   let acked = frame(first.shard, ack()).shard
   let second = fire(acked, gateway.Heartbeat)
   assert armed(second.outputs, gateway.Heartbeat) == [interval]
-  assert second.shard.rng == shard.rng
+  assert shard_rng(second.shard) == shard_rng(shard)
 }
 
 /// A heartbeat with no acknowledgement is a zombie, and the close code is
@@ -678,7 +680,7 @@ pub fn an_unacknowledged_beat_is_a_zombie_test() {
 
   assert plain(outputs)
     == [
-      Close(4000),
+      Close(close.code(close.Reconnect)),
       CancelTimer(gateway.Heartbeat),
       CancelTimer(gateway.Handshake),
       CancelTimer(gateway.Commands),
@@ -694,7 +696,7 @@ pub fn an_unacknowledged_beat_is_a_zombie_test() {
   assert sends(outputs) == []
   // A non-1000 close keeps the session, so the reconnect is a RESUME.
   assert gateway.session(after) == Some(Session("sess", resume_host(), 1))
-  assert after.phase == Waiting(Resume(Session("sess", resume_host(), 1)))
+  assert phase(after) == Waiting(Resume(Session("sess", resume_host(), 1)))
 }
 
 /// Inbound traffic is not an acknowledgement, or a busy shard stops detecting
@@ -718,7 +720,7 @@ pub fn op_11_is_the_only_acknowledgement_test() {
   let shard = fire(live(), gateway.Heartbeat).shard
   let Step(shard: after, outputs:) = frame(shard, ack())
   assert outputs == []
-  assert after.phase
+  assert phase(after)
     == Live(
       Beat(interval_ms: interval, unacked: 0, quiet: False),
       Session("sess", resume_host(), 1),
@@ -733,12 +735,9 @@ pub fn a_requested_beat_leaves_the_schedule_and_the_flag_alone_test() {
   let Step(shard: after, outputs:) = frame(shard, beat_request())
   assert outputs
     == [
-      Send(gateway_frame.Outbound(
-        op: gateway_frame.OpHeartbeat,
-        text: "{\"op\":1,\"d\":1}",
-      )),
+      Send(gateway_frame.heartbeat(Some(1))),
     ]
-  assert after.phase == frame(shard, ack()).shard.phase
+  assert phase(after) == phase(frame(shard, ack()).shard)
 
   // And from an outstanding beat it still only sends.
   let waiting = fire(live(), gateway.Heartbeat).shard
@@ -787,7 +786,7 @@ pub fn liveness_resets_on_every_connection_test() {
   let shard =
     drive(shard, [gateway.Frame(gateway.conn(shard), hello_at(45_000))])
 
-  assert shard.phase
+  assert phase(shard)
     == Resuming(
       Beat(interval_ms: 45_000, unacked: 0, quiet: False),
       Session("sess", resume_host(), 1),
@@ -840,7 +839,7 @@ pub fn a_fatal_close_stops_for_good_test() {
     let #(code, reason) = row
     let Step(shard: after, outputs:) =
       gateway.step(live(), gateway.Closed(Conn(5), Some(code)))
-    assert after.phase == Dead(reason)
+    assert phase(after) == Dead(reason)
     assert gateway.session(after) == None
     // The shard tuple travels with the reason. "invalid shard" is not
     // actionable without knowing which shard was sent.
@@ -861,14 +860,14 @@ pub fn a_command_flood_forces_the_top_rung_test() {
       Command(command.UpdatePresence(presence.new(presence.Idle(None)))),
     ])
   let shard =
-    Shard(..shard, pending: [
+    with_pending(shard, [
       command.UpdatePresence(presence.new(presence.Idle(None))),
     ])
 
   let Step(shard: after, outputs:) =
     gateway.step(shard, gateway.Closed(Conn(5), Some(4008)))
-  assert after.attempts == 1
-  assert after.pending == []
+  assert attempts(after) == 1
+  assert pending(after) == []
   assert reconnects(outputs) == [32_000]
   assert gateway.session(after) == Some(Session("sess", resume_host(), 1))
 }
@@ -878,13 +877,9 @@ pub fn a_command_flood_forces_the_top_rung_test() {
 pub fn the_close_code_and_the_session_are_one_decision_test() {
   let outstanding = fn() {
     let shard = zlib_live()
-    Shard(
-      ..shard,
-      inbound: gateway.Inbound(
-        buffer: <<>>,
-        inflating: Some(Stamp(0)),
-        pending: [],
-      ),
+    with_inbound(
+      shard,
+      gateway.Inbound(buffer: <<>>, inflating: Some(Stamp(0)), pending: []),
     )
   }
   let cases = [
@@ -922,7 +917,7 @@ pub fn the_close_code_and_the_session_are_one_decision_test() {
 pub fn op_7_closes_and_resumes_test() {
   let Step(shard: after, outputs:) = frame(live(), server_reconnect())
   assert closes(outputs) == [4000]
-  assert after.phase == Waiting(Resume(Session("sess", resume_host(), 1)))
+  assert phase(after) == Waiting(Resume(Session("sess", resume_host(), 1)))
   assert list.contains(
     outputs,
     Emit(gateway.Reconnecting(
@@ -938,15 +933,15 @@ pub fn op_7_closes_and_resumes_test() {
 pub fn op_7_before_hello_identifies_fresh_test() {
   let Step(shard: after, outputs:) = frame(greeting(), server_reconnect())
   assert closes(outputs) == [4000]
-  assert after.phase == Waiting(Identify)
+  assert phase(after) == Waiting(Identify)
 }
 
 /// An exhausted send budget must never delay a reconnect.
 pub fn op_7_is_not_queued_behind_commands_test() {
   let spent =
-    Shard(
-      ..live(),
-      phase: Live(
+    with_phase(
+      live(),
+      Live(
         Beat(interval_ms: interval, unacked: 0, quiet: False),
         Session("sess", resume_host(), 1),
         Budget(spent: 110, capacity: 110),
@@ -975,12 +970,12 @@ pub fn op_9_resumable_keeps_the_session_test() {
 pub fn op_9_unresumable_identifies_after_the_mandated_wait_test() {
   let Step(shard: after, outputs:) = frame(live(), invalid_session(False))
   assert gateway.session(after) == None
-  assert after.phase == Waiting(Identify)
+  assert phase(after) == Waiting(Identify)
   assert reconnects(outputs) == [5000]
 
   // The floor only lifts the low rungs; a shard already deep in the ladder
   // keeps its own delay, drawn against the identify ceiling.
-  let deep = Shard(..live(), attempts: 15)
+  let deep = with_attempts(live(), 15)
   let Step(shard: _, outputs:) = frame(deep, invalid_session(False))
   assert reconnects(outputs) == [300_000]
 }
@@ -988,7 +983,7 @@ pub fn op_9_unresumable_identifies_after_the_mandated_wait_test() {
 /// `d: true` with no session in hand is `d: false`.
 pub fn op_9_resumable_without_a_session_identifies_test() {
   let Step(shard: after, outputs:) = frame(identifying(), invalid_session(True))
-  assert after.phase == Waiting(Identify)
+  assert phase(after) == Waiting(Identify)
   assert closes(outputs) == [4000]
 }
 
@@ -1000,7 +995,7 @@ pub fn the_watchdog_covers_a_hung_dial_test() {
 
   assert list.contains(outputs, Drop)
   assert closes(outputs) == []
-  assert after.phase == Waiting(Identify)
+  assert phase(after) == Waiting(Identify)
   assert list.contains(
     outputs,
     Emit(gateway.Reconnecting(
@@ -1015,7 +1010,7 @@ pub fn the_watchdog_covers_a_hung_dial_test() {
 pub fn the_watchdog_covers_a_silent_socket_test() {
   let Step(shard: after, outputs:) = fire(greeting(), gateway.Handshake)
   assert closes(outputs) == [4000]
-  assert after.phase == Waiting(Identify)
+  assert phase(after) == Waiting(Identify)
 }
 
 /// At `max_concurrency: 1` the sixteenth shard waits 75 seconds, so a 30
@@ -1033,17 +1028,15 @@ pub fn a_stalled_resume_keeps_the_session_test() {
   let Step(shard: after, outputs:) = fire(resuming(), gateway.Handshake)
   assert closes(outputs) == [4000]
   assert gateway.session(after) == Some(stored())
-  assert after.phase == Waiting(Resume(stored()))
+  assert phase(after) == Waiting(Resume(stored()))
 }
 
 /// A gateway node that has gone away must not hold a shard offline forever.
 pub fn a_dead_resume_host_falls_back_to_the_configured_one_test() {
   let shard =
-    Shard(
-      ..gateway.resuming(config: conf(), seed: 1, session: stored()),
-      attempts: 3,
-      phase: Waiting(Resume(stored())),
-    )
+    gateway.resuming(config: conf(), seed: 1, session: stored())
+    |> with_attempts(3)
+    |> with_phase(Waiting(Resume(stored())))
   let Step(shard: after, outputs:) = fire(pinned(shard, 0), gateway.Reconnect)
 
   assert list.contains(outputs, Note(gateway.ResumeHostRejected(resume_host())))
@@ -1071,10 +1064,10 @@ pub fn the_ladder_advances_on_every_failure_test() {
     list.fold(list.repeat(Nil, 5), drive(shard(), [Start]), fn(shard, _) {
       cycle(shard)
     })
-  assert shard.attempts == 5
+  assert attempts(shard) == 5
 
   // And a healthy connection puts it back to zero.
-  assert live().attempts == 0
+  assert attempts(live()) == 0
 }
 
 /// A dial failure keeps the session and its host. Losing them would turn a
@@ -1091,7 +1084,7 @@ pub fn a_dial_failure_keeps_the_session_test() {
       OpenFailed(gateway.conn(shard), gateway.Unreachable("econnrefused")),
     )
 
-  assert after.attempts == 1
+  assert attempts(after) == 1
   assert gateway.session(after) == Some(stored())
   assert list.contains(
     outputs,
@@ -1118,7 +1111,7 @@ fn refused_dial(status: Int) -> Step {
 pub fn a_401_upgrade_retries_test() {
   let Step(shard: after, outputs:) = refused_dial(401)
 
-  assert after.phase == Waiting(Identify)
+  assert phase(after) == Waiting(Identify)
   assert !gateway.is_terminal(after)
   assert reconnects(outputs) == [500]
 }
@@ -1128,7 +1121,7 @@ pub fn a_401_upgrade_retries_test() {
 pub fn a_429_upgrade_waits_and_retries_test() {
   let Step(shard: after, outputs:) = refused_dial(429)
 
-  assert after.phase == Waiting(Identify)
+  assert phase(after) == Waiting(Identify)
   assert reconnects(outputs) == [conf().tuning.backoff_max_ms / 2]
   assert whys(outputs) == [gateway.DialFailed(gateway.Refused(429, "refused"))]
 }
@@ -1137,7 +1130,7 @@ pub fn a_429_upgrade_waits_and_retries_test() {
 pub fn another_refused_upgrade_retries_at_once_test() {
   let Step(shard: after, outputs:) = refused_dial(503)
 
-  assert after.phase == Waiting(Identify)
+  assert phase(after) == Waiting(Identify)
   assert reconnects(outputs) == [500]
 }
 
@@ -1169,12 +1162,12 @@ pub fn a_shard_that_never_reaches_ready_halts_test() {
 
   // One below the cap: still climbing the ladder, still armed to redial.
   let before = stalling(config, 3)
-  assert before.attempts == 3
-  assert before.phase == Waiting(Identify)
+  assert attempts(before) == 3
+  assert phase(before) == Waiting(Identify)
   assert !gateway.is_terminal(before)
 
   let Step(shard: after, outputs:) = no_progress_cycle(before)
-  assert after.phase == gateway.Exhausted(4)
+  assert phase(after) == gateway.Exhausted(4)
   assert gateway.is_terminal(after)
   assert list.contains(outputs, Emit(gateway.Halted(gateway.NoProgress(4))))
   assert reconnects(outputs) == []
@@ -1184,7 +1177,7 @@ pub fn a_shard_that_never_reaches_ready_halts_test() {
 /// stop, and it is 20 attempts that does it.
 pub fn the_default_no_progress_cap_halts_test() {
   assert !gateway.is_terminal(stalling(conf(), 19))
-  assert stalling(conf(), 20).phase == gateway.Exhausted(20)
+  assert phase(stalling(conf(), 20)) == gateway.Exhausted(20)
 }
 
 /// The counter resets on READY and not on connect, because connecting is what
@@ -1202,7 +1195,7 @@ pub fn reaching_ready_resets_the_no_progress_counter_test() {
   let shard = drive(shard, [gateway.Frame(gateway.conn(shard), hello())])
   let shard = drive(shard, [gateway.IdentifySlotGranted(gateway.conn(shard))])
   let shard = drive(shard, [gateway.Frame(gateway.conn(shard), ready_at(1))])
-  assert shard.attempts == 0
+  assert attempts(shard) == 0
 
   let shard = drive(shard, [gateway.Closed(gateway.conn(shard), Some(4000))])
   assert !gateway.is_terminal(stalling_on(shard, 2))
@@ -1269,11 +1262,11 @@ pub fn a_shard_outside_its_fleet_cannot_be_built_test() {
   let assert Ok(_) = gateway.sharding(index: 15, count: 16)
 
   assert gateway.sharding(index: 16, count: 16)
-    == Error(gateway_frame.IndexOutOfRange(index: 16, count: 16))
+    == Error(gateway_identify.IndexOutOfRange(index: 16, count: 16))
   assert gateway.sharding(index: -1, count: 16)
-    == Error(gateway_frame.IndexOutOfRange(index: -1, count: 16))
+    == Error(gateway_identify.IndexOutOfRange(index: -1, count: 16))
   assert gateway.sharding(index: 0, count: 0)
-    == Error(gateway_frame.EmptyFleet(count: 0))
+    == Error(gateway_identify.EmptyFleet(count: 0))
 }
 
 pub fn a_fleet_reports_its_own_shape_test() {
@@ -1294,7 +1287,7 @@ pub fn new_normalises_the_ranges_config_documents_test() {
         command_queue_max: -1,
       ),
     )
-  let config = gateway.new(config: wild, seed: 1).config
+  let config = shard_config(gateway.new(config: wild, seed: 1))
   assert config.tuning.missed_ack_limit == 1
   assert config.tuning.command_queue_max == 0
 }
@@ -1311,39 +1304,9 @@ pub fn large_threshold_is_clamped_before_it_reaches_a_config_test() {
         large_threshold: gateway.large_threshold(configured),
       )
     assert gateway.large_threshold_value(config.large_threshold) == expected
-    let held = gateway.new(config:, seed: 1).config.large_threshold
+    let held = shard_config(gateway.new(config:, seed: 1)).large_threshold
     assert gateway.large_threshold_value(held) == expected
   })
-}
-
-/// `Shard` is a public record, so a config can also reach the machine without
-/// passing through `new`. The two numbers a step reads are floored where they
-/// are read: a `missed_ack_limit` of 0 calls the first beat a zombie, and the
-/// shard reconnects forever without ever having sent one.
-pub fn a_config_that_skipped_new_is_still_floored_test() {
-  let unnormalised = fn(shard: Shard) {
-    Shard(
-      ..shard,
-      config: gateway.Config(
-        ..shard.config,
-        tuning: gateway.Tuning(
-          ..shard.config.tuning,
-          missed_ack_limit: 0,
-          command_queue_max: -1,
-        ),
-      ),
-    )
-  }
-
-  let beating = fire(unnormalised(live()), gateway.Heartbeat)
-  assert sends(beating.outputs) == ["{\"op\":1,\"d\":1}"]
-  assert closes(beating.outputs) == []
-
-  // A negative depth is no depth: the command is dropped, not buffered.
-  let queued =
-    gateway.step(unnormalised(shard()), set_status(presence.Idle(None)))
-  assert queued.outputs == [Note(gateway.CommandDropped(depth: 0))]
-  assert queued.shard.pending == []
 }
 
 /// An IDENTIFY over Discord's 4096 bytes is a config that cannot connect: the
@@ -1355,11 +1318,11 @@ pub fn an_identify_over_the_payload_limit_halts_test() {
   let Step(shard: after, outputs:) =
     gateway.step(shard, gateway.IdentifySlotGranted(conn))
 
-  let assert gateway.Unusable(bytes) = after.phase
+  let assert gateway.Unusable(bytes) = phase(after)
   assert bytes > 4096
   assert gateway.is_terminal(after)
   assert sends(outputs) == []
-  assert closes(outputs) == [close.code(close.Terminal)]
+  assert closes(outputs) == [1000]
   assert list.contains(outputs, ReleaseIdentifySlot(conn))
   assert list.contains(
     outputs,
@@ -1387,7 +1350,7 @@ pub fn commands_wait_for_a_live_connection_test() {
   let shard = continue_to_greeting(shard)
   let shard = drive(shard, [gateway.Frame(gateway.conn(shard), hello())])
   let shard = drive(shard, [gateway.IdentifySlotGranted(gateway.conn(shard))])
-  assert shard.pending
+  assert pending(shard)
     == [command.UpdatePresence(presence.new(presence.Idle(None)))]
 
   let Step(shard: after, outputs:) = frame(shard, ready_at(1))
@@ -1395,7 +1358,7 @@ pub fn commands_wait_for_a_live_connection_test() {
     == [
       "{\"op\":3,\"d\":{\"since\":null,\"activities\":[],\"status\":\"idle\",\"afk\":false}}",
     ]
-  assert after.pending == []
+  assert pending(after) == []
   assert armed(outputs, gateway.Commands) == [60_000]
 }
 
@@ -1426,7 +1389,7 @@ pub fn the_command_window_rolls_over_test() {
   let rolled = fire(third.shard, gateway.Commands)
   assert list.length(sends(rolled.outputs)) == 1
   assert armed(rolled.outputs, gateway.Commands) == [60_000]
-  assert rolled.shard.pending == []
+  assert pending(rolled.shard) == []
 
   // An empty window rolls over into no timer at all.
   let idle = fire(rolled.shard, gateway.Commands)
@@ -1448,7 +1411,7 @@ pub fn a_full_command_queue_drops_the_oldest_test() {
     gateway.step(shard, set_status(presence.Invisible))
 
   assert outputs == [Note(gateway.CommandDropped(depth: 2))]
-  assert after.pending
+  assert pending(after)
     == [
       command.UpdatePresence(presence.new(presence.Online)),
       command.UpdatePresence(presence.new(presence.Invisible)),
@@ -1487,7 +1450,7 @@ pub fn an_oversized_payload_is_never_written_test() {
 /// gateway asking for a beat every second cannot squeeze them out.
 pub fn the_command_budget_reserves_heartbeat_headroom_test() {
   let shard = live()
-  assert shard.phase
+  assert phase(shard)
     == Live(
       Beat(interval_ms: interval, unacked: 0, quiet: False),
       Session("sess", resume_host(), 1),
@@ -1496,12 +1459,12 @@ pub fn the_command_budget_reserves_heartbeat_headroom_test() {
 
   let hasty = drive(identifying(), [])
   let hasty =
-    Shard(
-      ..hasty,
-      phase: Identifying(Beat(interval_ms: 1000, unacked: 0, quiet: False)),
+    with_phase(
+      hasty,
+      Identifying(Beat(interval_ms: 1000, unacked: 0, quiet: False)),
     )
   let Step(shard: after, outputs: _) = frame(hasty, ready_at(1))
-  assert after.phase
+  assert phase(after)
     == Live(
       Beat(interval_ms: 1000, unacked: 0, quiet: False),
       Session("sess", resume_host(), 1),
@@ -1531,7 +1494,7 @@ pub fn an_unknown_opcode_is_noted_and_survived_test() {
   let Step(shard: after, outputs:) = frame(live(), "{\"op\":99,\"d\":{}}")
   assert outputs
     == [Note(gateway.UndecodableFrame(gateway.UnknownOpcode(op: 99)))]
-  assert after.phase == live().phase
+  assert phase(after) == phase(live())
 }
 
 /// A payload whose own content contains `"op":` must not be mis-read, which is
@@ -1586,16 +1549,16 @@ pub fn chunks_buffer_until_the_terminator_test() {
   let Step(shard: shard, outputs:) =
     gateway.step(shard, gateway.Bytes(conn, <<1, 2>>))
   assert outputs == []
-  assert shard.inbound.buffer == <<1, 2>>
+  assert inbound(shard).buffer == <<1, 2>>
 
   let Step(shard: shard, outputs:) =
     gateway.step(shard, gateway.Bytes(conn, <<3, 0, 0, 0xFF, 0xFF>>))
   assert outputs == [Inflate(conn, Stamp(14), <<1, 2, 3, 0, 0, 0xFF, 0xFF>>)]
-  assert shard.inbound
+  assert inbound(shard)
     == gateway.Inbound(buffer: <<>>, inflating: Some(Stamp(14)), pending: [])
 
   // Buffering a chunk counts as liveness even though no payload completed.
-  case shard.phase {
+  case phase(shard) {
     Live(beat, _, _) -> {
       assert beat.quiet == False
     }
@@ -1608,7 +1571,7 @@ pub fn an_inflated_payload_is_handled_as_a_frame_test() {
   let conn = gateway.conn(shard)
   let shard =
     gateway.step(shard, gateway.Bytes(conn, <<0, 0, 0xFF, 0xFF>>)).shard
-  let assert Some(stamp) = shard.inbound.inflating
+  let assert Some(stamp) = inbound(shard).inflating
 
   let Step(shard: after, outputs:) =
     gateway.step(
@@ -1626,13 +1589,13 @@ pub fn a_payload_queued_behind_an_inflate_is_started_next_test() {
   let conn = gateway.conn(shard)
   let shard =
     gateway.step(shard, gateway.Bytes(conn, <<1, 0, 0, 0xFF, 0xFF>>)).shard
-  let assert Some(first) = shard.inbound.inflating
+  let assert Some(first) = inbound(shard).inflating
 
   let shard =
     gateway.step(shard, gateway.Bytes(conn, <<2, 0, 0, 0xFF, 0xFF>>)).shard
   // Queued, not buffered. In the buffer the next frame would append to it and
   // the two payloads would reach the inflater as one.
-  assert shard.inbound
+  assert inbound(shard)
     == gateway.Inbound(buffer: <<>>, inflating: Some(first), pending: [
       <<2, 0, 0, 0xFF, 0xFF>>,
     ])
@@ -1646,7 +1609,7 @@ pub fn a_payload_queued_behind_an_inflate_is_started_next_test() {
   // re-enters `step` has already seen every protocol effect of the batch.
   assert plain(outputs) == [Inflate(conn, Stamp(14), <<2, 0, 0, 0xFF, 0xFF>>)]
   assert dispatched(outputs) == [#("MESSAGE_CREATE", 5)]
-  assert after.inbound.inflating == Some(Stamp(14))
+  assert inbound(after).inflating == Some(Stamp(14))
 }
 
 /// A poisoned context cannot be recovered inside a connection, and the socket
@@ -1656,7 +1619,7 @@ pub fn an_inflate_failure_resets_the_context_and_resumes_test() {
   let conn = gateway.conn(shard)
   let shard =
     gateway.step(shard, gateway.Bytes(conn, <<0, 0, 0xFF, 0xFF>>)).shard
-  let assert Some(stamp) = shard.inbound.inflating
+  let assert Some(stamp) = inbound(shard).inflating
 
   let Step(shard: after, outputs:) =
     gateway.step(shard, Inflated(conn, stamp, Error(desynced())))
@@ -1664,7 +1627,7 @@ pub fn an_inflate_failure_resets_the_context_and_resumes_test() {
   assert list.contains(outputs, Note(gateway.InflateFailed(desynced())))
   assert list.contains(outputs, gateway.ResetInflater(conn))
   assert gateway.session(after) == Some(Session("sess", resume_host(), 1))
-  assert after.inbound
+  assert inbound(after)
     == gateway.Inbound(buffer: <<>>, inflating: None, pending: [])
 }
 
@@ -1684,7 +1647,7 @@ pub fn an_overflowing_buffer_tears_the_connection_down_test() {
     gateway.step(shard, gateway.Bytes(gateway.conn(shard), <<1, 2, 3, 4, 5>>))
   assert list.contains(outputs, Note(gateway.BufferOverflow(5)))
   assert closes(outputs) == [4000]
-  assert after.inbound
+  assert inbound(after)
     == gateway.Inbound(buffer: <<>>, inflating: None, pending: [])
 }
 
@@ -1696,7 +1659,7 @@ pub fn a_binary_frame_without_compression_is_reported_test() {
     gateway.step(shard, gateway.Bytes(gateway.conn(shard), <<1, 2, 3>>))
   assert outputs
     == [Note(gateway.UndecodableFrame(gateway.BinaryFrameWithoutCompression))]
-  assert after.inbound.buffer == <<>>
+  assert inbound(after).buffer == <<>>
 }
 
 /// A text frame is parsed as JSON whatever the negotiated compression is. The
@@ -1706,7 +1669,7 @@ pub fn a_text_frame_under_compression_is_still_json_test() {
   let Step(shard: after, outputs:) =
     frame(shard, dispatch_at(4, "TYPING_START"))
   assert dispatched(outputs) == [#("TYPING_START", 4)]
-  assert after.inbound
+  assert inbound(after)
     == gateway.Inbound(buffer: <<>>, inflating: None, pending: [])
 }
 
@@ -1717,10 +1680,10 @@ pub fn a_dial_clears_a_stranded_buffer_test() {
   let shard =
     gateway.step(shard, gateway.Bytes(gateway.conn(shard), <<1, 2>>)).shard
   let shard = drive(shard, [gateway.Closed(gateway.conn(shard), Some(1006))])
-  assert shard.inbound.buffer == <<1, 2>>
+  assert inbound(shard).buffer == <<1, 2>>
 
   let Step(shard: after, outputs:) = fire(shard, gateway.Reconnect)
-  assert after.inbound
+  assert inbound(after)
     == gateway.Inbound(buffer: <<>>, inflating: None, pending: [])
   assert list.contains(outputs, gateway.ResetInflater(gateway.conn(after)))
 }
@@ -1742,7 +1705,7 @@ pub fn an_inflate_answer_from_a_superseded_request_is_dropped_test() {
   let conn = gateway.conn(shard)
   let shard =
     gateway.step(shard, gateway.Bytes(conn, <<65, 0, 0, 255, 255>>)).shard
-  let assert Some(outstanding) = shard.inbound.inflating
+  let assert Some(outstanding) = inbound(shard).inflating
 
   let stale = Stamp(77)
   assert stale != outstanding
@@ -1754,7 +1717,7 @@ pub fn an_inflate_answer_from_a_superseded_request_is_dropped_test() {
   // The one it did ask for still applies.
   let Step(shard: applied, outputs: _) =
     gateway.step(shard, Inflated(conn, outstanding, Ok(ack())))
-  assert applied.inbound.inflating == None
+  assert inbound(applied).inflating == None
 }
 
 /// 1000 is for a host that meant to stop, and it ends the session.
@@ -1762,7 +1725,7 @@ pub fn stop_closes_with_1000_and_releases_everything_test() {
   let Step(shard: after, outputs:) = gateway.step(live(), Stop)
   assert outputs
     == [
-      Close(1000),
+      Close(close.code(close.Terminal)),
       CancelTimer(gateway.Heartbeat),
       CancelTimer(gateway.Handshake),
       CancelTimer(gateway.Reconnect),
@@ -1771,7 +1734,7 @@ pub fn stop_closes_with_1000_and_releases_everything_test() {
       gateway.ResetInflater(Conn(5)),
       Emit(gateway.Halted(gateway.Requested)),
     ]
-  assert after.phase == Stopped
+  assert phase(after) == Stopped
   assert gateway.session(after) == None
 }
 
@@ -1943,7 +1906,7 @@ pub fn a_persisted_session_round_trips_test() {
 /// sent there with close 4003, which destroys the session the resume was for.
 pub fn commands_wait_for_resumed_not_for_resuming_test() {
   let shard = drive(resuming(), [set_status(presence.Idle(None))])
-  assert shard.pending
+  assert pending(shard)
     == [command.UpdatePresence(presence.new(presence.Idle(None)))]
 
   let Step(shard: after, outputs:) =
@@ -1952,7 +1915,7 @@ pub fn commands_wait_for_resumed_not_for_resuming_test() {
     == [
       "{\"op\":3,\"d\":{\"since\":null,\"activities\":[],\"status\":\"idle\",\"afk\":false}}",
     ]
-  assert after.pending == []
+  assert pending(after) == []
 }
 
 /// A connection that dies while waiting for a slot hands the slot back rather
@@ -1962,7 +1925,7 @@ pub fn a_connection_that_dies_while_queued_releases_its_slot_test() {
   let Step(shard: after, outputs:) =
     gateway.step(shard, gateway.Closed(gateway.conn(shard), Some(1006)))
   assert list.contains(outputs, ReleaseIdentifySlot(Conn(5)))
-  assert after.phase == Waiting(Identify)
+  assert phase(after) == Waiting(Identify)
 }
 
 /// Host events come last in every batch, so an adapter whose handler re-enters
@@ -2012,7 +1975,7 @@ pub fn the_ladder_caps_higher_on_the_identify_path_test() {
   let deep = fn(shard: Shard) {
     let Step(shard: _, outputs:) =
       gateway.step(
-        Shard(..shard, attempts: 15),
+        with_attempts(shard, 15),
         gateway.Closed(Conn(5), Some(4000)),
       )
     reconnects(outputs)
@@ -2021,10 +1984,7 @@ pub fn the_ladder_caps_higher_on_the_identify_path_test() {
   assert deep(live()) == [32_000]
   // 4007 discards it, so the next attempt has to identify.
   let Step(shard: _, outputs:) =
-    gateway.step(
-      Shard(..live(), attempts: 15),
-      gateway.Closed(Conn(5), Some(4007)),
-    )
+    gateway.step(with_attempts(live(), 15), gateway.Closed(Conn(5), Some(4007)))
   assert reconnects(outputs) == [300_000]
 }
 
@@ -2096,14 +2056,14 @@ pub fn a_partial_survives_the_queued_payload_starting_test() {
   // The first payload occupies the inflate context.
   let shard =
     gateway.step(shard, gateway.Bytes(conn, <<65, 0, 0, 255, 255>>)).shard
-  let assert Some(stamp) = shard.inbound.inflating
+  let assert Some(stamp) = inbound(shard).inflating
 
   // The second completes behind it and queues. The third is the head of a
   // payload that has not finished arriving.
   let shard =
     gateway.step(shard, gateway.Bytes(conn, <<66, 0, 0, 255, 255>>)).shard
   let shard = gateway.step(shard, gateway.Bytes(conn, <<67, 68>>)).shard
-  assert shard.inbound.buffer == <<67, 68>>
+  assert inbound(shard).buffer == <<67, 68>>
 
   // The reply starts the queued payload, which is not what the buffer holds.
   let Step(shard: shard, outputs:) =
@@ -2114,14 +2074,14 @@ pub fn a_partial_survives_the_queued_payload_starting_test() {
       _ -> False
     }
   })
-  assert shard.inbound.buffer == <<67, 68>>
+  assert inbound(shard).buffer == <<67, 68>>
 
   // The rest of the third arrives, and the payload is whole.
   let shard =
     gateway.step(shard, gateway.Bytes(conn, <<69, 0, 0, 255, 255>>)).shard
-  assert shard.inbound.pending == [<<67, 68, 69, 0, 0, 255, 255>>]
+  assert inbound(shard).pending == [<<67, 68, 69, 0, 0, 255, 255>>]
 
-  let assert Some(stamp) = shard.inbound.inflating
+  let assert Some(stamp) = inbound(shard).inflating
   let Step(shard: _, outputs:) =
     gateway.step(shard, Inflated(conn, stamp, Ok("{}")))
   assert list.any(outputs, fn(output) {
@@ -2133,7 +2093,7 @@ pub fn a_partial_survives_the_queued_payload_starting_test() {
 }
 
 fn inflate_stamp(shard: Shard) -> gateway.Stamp {
-  case shard.inbound.inflating {
+  case inbound(shard).inflating {
     option.Some(stamp) -> stamp
     option.None -> gateway.Stamp(0)
   }
@@ -2148,23 +2108,23 @@ pub fn a_terminator_split_across_frames_does_not_flush_test() {
   // A real payload goes to the inflater and occupies the context.
   let shard =
     gateway.step(shard, gateway.Bytes(conn, <<9, 0, 0, 0xFF, 0xFF>>)).shard
-  let assert Some(stamp) = shard.inbound.inflating
+  let assert Some(stamp) = inbound(shard).inflating
 
   // Then two frames whose join ends in the terminator, neither of which does.
   // The second is two bytes, too short to carry the four on its own.
   let shard = gateway.step(shard, gateway.Bytes(conn, <<1, 0, 0>>)).shard
   let shard = gateway.step(shard, gateway.Bytes(conn, <<0xFF, 0xFF>>)).shard
-  assert shard.inbound.pending == []
+  assert inbound(shard).pending == []
   // The bytes held now end with the terminator even though no frame did.
-  assert reassembly.ends_with_sync(shard.inbound.buffer)
+  assert reassembly.ends_with_sync(inbound(shard).buffer)
 
   // Freeing the context must not hand that buffer over.
   let Step(shard: after, outputs:) =
     gateway.step(shard, Inflated(conn, stamp, Ok(ack())))
 
-  assert after.inbound.inflating == None
+  assert inbound(after).inflating == None
   assert list.filter(outputs, is_inflate) == []
-  assert after.inbound.buffer == <<1, 0, 0, 0xFF, 0xFF>>
+  assert inbound(after).buffer == <<1, 0, 0, 0xFF, 0xFF>>
 }
 
 fn is_inflate(output: gateway.Output) -> Bool {

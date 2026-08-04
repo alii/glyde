@@ -40,7 +40,7 @@ pub fn decoder() -> Decoder(Flags(kind)) {
 /// True when any bit of `bit` is set. Pass a single bit from the owning
 /// model's table: a multi-bit mask answers "any", not "all".
 pub fn has_bit(flags: Flags(kind), bit: Int) -> Bool {
-  wire.has_bit(flags.bits, bit)
+  int.bitwise_and(flags.bits, bit) != 0
 }
 
 pub fn set_bit(flags: Flags(kind), bit: Int) -> Flags(kind) {

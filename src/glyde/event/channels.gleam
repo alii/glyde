@@ -26,6 +26,11 @@ pub fn thread_delete_decoder(
   use thread_id <- decode.field("id", id.decoder())
   use guild_id <- decode.field("guild_id", id.decoder())
   use parent_id <- wire.opt_field("parent_id", id.decoder())
-  use type_ <- decode.field("type", channel.channel_type_decoder())
+  use type_ <- wire.type_field(
+    "type",
+    channel.channel_type_from_int,
+    channel.GuildText,
+    "ChannelType",
+  )
   decode.success(build(thread_id, guild_id, parent_id, type_))
 }

@@ -271,7 +271,7 @@ pub fn union_and_difference_test() {
 pub fn administrator_grants_everything_test() {
   let admin = permissions.new([Administrator])
   list.each(permissions.all_permissions(), fn(permission) {
-    assert permissions.allows(admin, permission)
+    assert permissions.allows(permissions.effective(admin), permission)
   })
   assert permissions.to_list(admin) == [Administrator]
   assert permissions.to_string(admin) == "8"
@@ -299,8 +299,8 @@ pub fn contains_is_false_for_a_permission_that_is_not_there_test() {
   assert !permissions.contains(permissions.none(), ViewChannel)
 
   // Without Administrator the two questions have the same answer.
-  assert permissions.allows(granted, SendMessages)
-  assert !permissions.allows(granted, BanMembers)
+  assert permissions.allows(permissions.effective(granted), SendMessages)
+  assert !permissions.allows(permissions.effective(granted), BanMembers)
 }
 
 pub fn decodes_from_a_json_string_test() {

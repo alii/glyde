@@ -30,12 +30,14 @@ pub fn thread_delete_is_a_four_key_payload_test() {
     )
 }
 
-/// An unknown thread type must not take the event with it.
-pub fn an_unknown_thread_type_still_decodes_test() {
+/// An unmodelled thread type is a glyde bug, so it fails the decode and
+/// reaches `on_status` as `Undecodable`.
+pub fn an_unmodelled_thread_type_fails_the_decode_test() {
   let future =
     "{\"id\":\"40\",\"guild_id\":\"10\",\"parent_id\":\"20\",\"type\":99}"
-  let assert event.ThreadDelete(type_:, ..) = decoded("THREAD_DELETE", future)
-  assert type_ == channel.UnknownChannelType(99)
+  let assert event.Malformed(errors:) =
+    event.dispatch("THREAD_DELETE", payload(future)).outcome
+  assert errors != []
 }
 
 /// `last_pin_timestamp` is null once the last pin goes, and absent in a DM

@@ -5,6 +5,7 @@ import glyde/flags
 import glyde/guild
 import glyde/id
 import glyde/permissions
+import glyde/rest/body
 
 fn parse(text: String) -> Result(guild.Guild, json.DecodeError) {
   json.parse(text, guild.decoder())
@@ -18,8 +19,8 @@ pub fn decodes_the_two_required_fields_alone_test() {
   assert bare.name == ""
   assert bare.afk_timeout == 300
   assert bare.preferred_locale == "en-US"
-  assert bare.verification_level == guild.NoVerification
-  assert bare.premium_tier == guild.NoTier
+  assert bare.verification_level == None
+  assert bare.premium_tier == None
   assert bare.roles == []
   assert bare.emojis == []
   assert bare.features == []
@@ -67,12 +68,12 @@ pub fn decodes_a_rest_guild_test() {
       "{\"id\":\"197038439483310086\",\"name\":\"Discord Testers\",\"icon\":\"f64c482b807da4f539cff778d174971c\",\"description\":\"The official place\",\"splash\":null,\"discovery_splash\":null,\"features\":[\"COMMUNITY\",\"NEWS\",\"VANITY_URL\"],\"emojis\":[],\"banner\":\"9b6439a7de04f1d26af92f84ac9e1e4a\",\"owner_id\":\"73193882359173120\",\"application_id\":null,\"region\":null,\"afk_channel_id\":null,\"afk_timeout\":300,\"system_channel_id\":null,\"widget_enabled\":true,\"widget_channel_id\":null,\"verification_level\":3,\"roles\":[],\"default_message_notifications\":1,\"mfa_level\":1,\"explicit_content_filter\":2,\"max_presences\":40000,\"max_members\":250000,\"vanity_url_code\":\"discord-testers\",\"premium_tier\":3,\"premium_subscription_count\":33,\"system_channel_flags\":0,\"preferred_locale\":\"en-US\",\"rules_channel_id\":\"441688182833020939\",\"public_updates_channel_id\":\"281283303326089216\",\"safety_alerts_channel_id\":\"281283303326089216\",\"nsfw_level\":0,\"premium_progress_bar_enabled\":false}",
     )
   assert server.name == "Discord Testers"
-  assert server.verification_level == guild.HighVerification
-  assert server.default_message_notifications == guild.OnlyMentions
-  assert server.explicit_content_filter == guild.FilterAllMembers
-  assert server.mfa_level == guild.ElevatedMfa
-  assert server.premium_tier == guild.Tier3
-  assert server.nsfw_level == guild.DefaultNsfwLevel
+  assert server.verification_level == Some(guild.HighVerification)
+  assert server.default_message_notifications == Some(guild.OnlyMentions)
+  assert server.explicit_content_filter == Some(guild.FilterAllMembers)
+  assert server.mfa_level == Some(guild.ElevatedMfa)
+  assert server.premium_tier == Some(guild.Tier3)
+  assert server.nsfw_level == Some(guild.DefaultNsfwLevel)
   assert server.premium_subscription_count == Some(33)
   assert server.max_presences == Some(40_000)
   assert server.widget_enabled == Some(True)
@@ -92,7 +93,7 @@ pub fn a_user_guilds_entry_carries_owner_and_permissions_test() {
   assert mine.name == "1337 Krew"
   assert mine.owner == True
   let assert Some(granted) = mine.permissions
-  assert permissions.to_string(granted) == "36953089"
+  assert permissions.to_string(permissions.raw(granted)) == "36953089"
   assert mine.features == ["COMMUNITY"]
 }
 
@@ -212,46 +213,35 @@ pub fn verification_level_round_trips_test() {
   ]
   list.each(cases, fn(pair) {
     let #(wire, variant) = pair
-    assert guild.verification_level_from_int(wire) == variant
+    assert guild.verification_level_from_int(wire) == Some(variant)
     assert guild.verification_level_to_int(variant) == wire
   })
-  assert guild.verification_level_from_int(9)
-    == guild.UnknownVerificationLevel(9)
-  assert guild.verification_level_to_int(guild.UnknownVerificationLevel(9)) == 9
+  assert guild.verification_level_from_int(9) == None
 }
 
 pub fn message_notification_level_round_trips_test() {
-  assert guild.message_notification_level_from_int(0) == guild.AllMessages
-  assert guild.message_notification_level_from_int(1) == guild.OnlyMentions
-  assert guild.message_notification_level_from_int(4)
-    == guild.UnknownMessageNotificationLevel(4)
+  assert guild.message_notification_level_from_int(0) == Some(guild.AllMessages)
+  assert guild.message_notification_level_from_int(1)
+    == Some(guild.OnlyMentions)
+  assert guild.message_notification_level_from_int(4) == None
   assert guild.message_notification_level_to_int(guild.OnlyMentions) == 1
-  assert guild.message_notification_level_to_int(
-      guild.UnknownMessageNotificationLevel(4),
-    )
-    == 4
 }
 
 pub fn explicit_content_filter_round_trips_test() {
-  assert guild.explicit_content_filter_from_int(0) == guild.FilterDisabled
+  assert guild.explicit_content_filter_from_int(0) == Some(guild.FilterDisabled)
   assert guild.explicit_content_filter_from_int(1)
-    == guild.FilterMembersWithoutRoles
-  assert guild.explicit_content_filter_from_int(2) == guild.FilterAllMembers
-  assert guild.explicit_content_filter_from_int(8)
-    == guild.UnknownExplicitContentFilterLevel(8)
+    == Some(guild.FilterMembersWithoutRoles)
+  assert guild.explicit_content_filter_from_int(2)
+    == Some(guild.FilterAllMembers)
+  assert guild.explicit_content_filter_from_int(8) == None
   assert guild.explicit_content_filter_to_int(guild.FilterAllMembers) == 2
-  assert guild.explicit_content_filter_to_int(
-      guild.UnknownExplicitContentFilterLevel(8),
-    )
-    == 8
 }
 
 pub fn mfa_level_round_trips_test() {
-  assert guild.mfa_level_from_int(0) == guild.NoMfa
-  assert guild.mfa_level_from_int(1) == guild.ElevatedMfa
-  assert guild.mfa_level_from_int(5) == guild.UnknownMfaLevel(5)
+  assert guild.mfa_level_from_int(0) == Some(guild.NoMfa)
+  assert guild.mfa_level_from_int(1) == Some(guild.ElevatedMfa)
+  assert guild.mfa_level_from_int(5) == None
   assert guild.mfa_level_to_int(guild.ElevatedMfa) == 1
-  assert guild.mfa_level_to_int(guild.UnknownMfaLevel(5)) == 5
 }
 
 pub fn nsfw_level_round_trips_test() {
@@ -263,11 +253,10 @@ pub fn nsfw_level_round_trips_test() {
   ]
   list.each(cases, fn(pair) {
     let #(wire, variant) = pair
-    assert guild.nsfw_level_from_int(wire) == variant
+    assert guild.nsfw_level_from_int(wire) == Some(variant)
     assert guild.nsfw_level_to_int(variant) == wire
   })
-  assert guild.nsfw_level_from_int(7) == guild.UnknownNsfwLevel(7)
-  assert guild.nsfw_level_to_int(guild.UnknownNsfwLevel(7)) == 7
+  assert guild.nsfw_level_from_int(7) == None
 }
 
 pub fn premium_tier_round_trips_test() {
@@ -279,23 +268,22 @@ pub fn premium_tier_round_trips_test() {
   ]
   list.each(cases, fn(pair) {
     let #(wire, variant) = pair
-    assert guild.premium_tier_from_int(wire) == variant
+    assert guild.premium_tier_from_int(wire) == Some(variant)
     assert guild.premium_tier_to_int(variant) == wire
   })
-  assert guild.premium_tier_from_int(4) == guild.UnknownPremiumTier(4)
-  assert guild.premium_tier_to_int(guild.UnknownPremiumTier(4)) == 4
+  assert guild.premium_tier_from_int(4) == None
 }
 
-/// An unknown enum value must not sink the whole guild.
-pub fn an_unknown_enum_value_does_not_fail_the_guild_test() {
+/// An unmodelled enum value decodes as `None` rather than sinking the guild.
+pub fn an_unmodelled_enum_value_does_not_fail_the_guild_test() {
   let assert Ok(future) =
     parse(
       "{\"id\":\"2\",\"owner_id\":\"3\",\"verification_level\":9,\"nsfw_level\":7,\"premium_tier\":4,\"mfa_level\":5}",
     )
-  assert future.verification_level == guild.UnknownVerificationLevel(9)
-  assert future.nsfw_level == guild.UnknownNsfwLevel(7)
-  assert future.premium_tier == guild.UnknownPremiumTier(4)
-  assert future.mfa_level == guild.UnknownMfaLevel(5)
+  assert future.verification_level == None
+  assert future.nsfw_level == None
+  assert future.premium_tier == None
+  assert future.mfa_level == None
 }
 
 /// All six flags are suppressions, so a set bit hides a notice.
@@ -322,21 +310,13 @@ pub fn system_channel_flags_keep_unnamed_bits_test() {
   assert guild.has_flag(future, guild.SuppressPremiumSubscriptions) == False
 }
 
-pub fn has_system_channel_flag_reads_the_guild_test() {
+pub fn system_channel_flags_decode_from_json_test() {
   let assert Ok(quiet) =
     parse("{\"id\":\"2\",\"owner_id\":\"3\",\"system_channel_flags\":3}")
-  assert guild.has_system_channel_flag(quiet, guild.SuppressJoinNotifications)
-    == True
-  assert guild.has_system_channel_flag(
-      quiet,
-      guild.SuppressPremiumSubscriptions,
-    )
-    == True
-  assert guild.has_system_channel_flag(
-      quiet,
-      guild.SuppressGuildReminderNotifications,
-    )
-    == False
+  let bits = quiet.system_channel_flags
+  assert guild.has_flag(bits, guild.SuppressJoinNotifications) == True
+  assert guild.has_flag(bits, guild.SuppressPremiumSubscriptions) == True
+  assert guild.has_flag(bits, guild.SuppressGuildReminderNotifications) == False
 }
 
 /// An available guild may still carry `"unavailable": false`, so GUILD_CREATE
@@ -433,15 +413,17 @@ pub fn a_whole_number_written_as_a_float_still_decodes_test() {
     )
   assert server.afk_timeout == 60
   assert server.max_members == Some(250_000)
-  assert server.premium_tier == guild.Tier2
+  assert server.premium_tier == Some(guild.Tier2)
 }
 
-pub fn enums_encode_as_their_wire_numbers_test() {
-  assert json.to_string(guild.premium_tier_to_json(guild.Tier3)) == "3"
-  assert json.to_string(guild.nsfw_level_to_json(guild.UnknownNsfwLevel(7)))
-    == "7"
-  assert json.to_string(guild.verification_level_to_json(
-      guild.VeryHighVerification,
-    ))
-    == "4"
+pub fn a_ban_can_delete_nothing_test() {
+  assert guild.create_ban_body(guild.CreateBan(delete_message_seconds: None))
+    == body.json([])
+}
+
+pub fn a_ban_can_sweep_a_week_of_messages_test() {
+  assert guild.create_ban_body(
+      guild.CreateBan(delete_message_seconds: Some(604_800)),
+    )
+    == body.json([#("delete_message_seconds", json.int(604_800))])
 }

@@ -1,6 +1,7 @@
 import gleam/list
 import gleam/option.{None, Some}
 import glyde/gateway/close
+import glyde/websocket/sendcode
 
 /// Every inbound close code and what it calls for.
 fn table() -> List(#(option.Option(Int), close.Disposition)) {
@@ -42,7 +43,7 @@ pub fn inbound_disposition_table_test() {
 pub fn direction_changes_the_meaning_of_1000_test() {
   assert close.from_gateway(Some(1000)) == close.ReconnectResume
 
-  assert close.code(close.Terminal) == 1000
+  assert sendcode.to_int(close.code(close.Terminal)) == 1000
   assert !close.intent_keeps_session(close.Terminal)
 }
 
@@ -70,7 +71,7 @@ pub fn unknown_codes_resume_test() {
 /// intent that means to keep one must not pick either.
 pub fn keeping_the_session_never_sends_a_killing_code_test() {
   list.each([close.Reconnect, close.FreshIdentify, close.Terminal], fn(intent) {
-    let code = close.code(intent)
+    let code = sendcode.to_int(close.code(intent))
     case close.intent_keeps_session(intent) {
       True -> {
         assert #(intent, code != 1000 && code != 1001) == #(intent, True)
@@ -87,9 +88,9 @@ pub fn our_own_close_keeps_its_intent_test() {
   assert !close.intent_keeps_session(close.FreshIdentify)
   assert !close.intent_keeps_session(close.Terminal)
 
-  assert close.code(close.Reconnect) == 4000
-  assert close.code(close.FreshIdentify) == 4000
-  assert close.code(close.Terminal) == 1000
+  assert sendcode.to_int(close.code(close.Reconnect)) == 4000
+  assert sendcode.to_int(close.code(close.FreshIdentify)) == 4000
+  assert sendcode.to_int(close.code(close.Terminal)) == 1000
 }
 
 pub fn fatal_codes_never_reconnect_test() {

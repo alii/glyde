@@ -14,7 +14,7 @@
 //// assert testing.every_ordering(gw, shard, inputs, fn(run) {
 ////     list.count(run.outputs, is_open) <= 1
 ////   })
-////   == testing.Held
+////   == Ok(testing.Held)
 //// ```
 ////
 //// Hold time still across a permutation run: a machine that reads a clock out
@@ -27,7 +27,7 @@ import gleam/result
 
 /// A state machine this harness can drive: one input, a new state and whatever
 /// it emitted on the way. Timer wiring is a separate `Timers`, and classifying
-/// an output is an argument to `notes` and `without_notes`.
+/// an output is an argument to `without_notes`.
 pub type Machine(state, input, output) =
   fn(state, input) -> #(state, List(output))
 
@@ -64,25 +64,31 @@ pub fn without_notes(
   list.filter(outputs, fn(output) { !is_note(output) })
 }
 
-/// Keep only the diagnostics. Asserting that a stale timer was recognised and
-/// dropped says more than asserting that nothing happened.
-pub fn notes(
-  is_note: fn(output) -> Bool,
-  outputs: List(output),
-) -> List(output) {
-  list.filter(outputs, is_note)
-}
-
 /// The most inputs the runners below will permute. Eight is 40 320 orderings
 /// and nine is nine times that, so eight is our choice.
 pub const max_permuted: Int = 8
 
 /// Every ordering of `items`: the identity first, then by the position each
-/// item held. The order is part of this module's contract.
+/// item held. The order is part of this module's contract, so it is enumerated
+/// here rather than delegated to stdlib, which promises no order.
 ///
 /// `n` items give `n!` orderings, and unlike the runners this refuses nothing.
 pub fn orderings(items: List(a)) -> List(List(a)) {
-  list.permutations(items)
+  permute(items)
+}
+
+/// Pick each item as the head in turn and recurse on the rest, giving
+/// lexicographic order by original position with the identity first.
+fn permute(items: List(a)) -> List(List(a)) {
+  case items {
+    [] -> [[]]
+    _ ->
+      list.index_map(items, fn(head, i) {
+        let rest = list.append(list.take(items, i), list.drop(items, i + 1))
+        list.map(permute(rest), fn(tail) { [head, ..tail] })
+      })
+      |> list.flatten
+  }
 }
 
 /// Why both runners refuse a set of inputs, rather than hang on it.
@@ -106,9 +112,6 @@ pub type Verdict(state, input, output) {
     /// The run of `broke_after`.
     run: Run(state, output),
   )
-
-  /// Past `max_permuted`, so nothing ran.
-  Refused(TooMany)
 }
 
 /// Every ordering of `inputs`, or the refusal both runners answer with.
@@ -132,26 +135,24 @@ pub fn every_ordering(
   state: state,
   inputs: List(input),
   invariant: fn(Run(state, output)) -> Bool,
-) -> Verdict(state, input, output) {
-  case permutable(inputs) {
-    Error(too_many) -> Refused(too_many)
-    Ok(orderings) ->
-      list.fold(orderings, Held, fn(best, ordering) {
-        case first_break(machine, state, ordering, invariant) {
-          None -> best
-          Some(#(broke_after, run)) ->
-            case best {
-              // A tie keeps `best`, so the earliest ordering wins.
-              Broke(broke_after: shortest, ..) ->
-                case list.length(broke_after) < list.length(shortest) {
-                  True -> Broke(ordering:, broke_after:, run:)
-                  False -> best
-                }
-              _ -> Broke(ordering:, broke_after:, run:)
+) -> Result(Verdict(state, input, output), TooMany) {
+  use orderings <- result.map(permutable(inputs))
+
+  list.fold(orderings, Held, fn(best, ordering) {
+    case first_break(machine, state, ordering, invariant) {
+      None -> best
+      Some(#(broke_after, run)) ->
+        case best {
+          Held -> Broke(ordering:, broke_after:, run:)
+          // A tie keeps `best`, so the earliest ordering wins.
+          Broke(broke_after: shortest, ..) ->
+            case list.length(broke_after) < list.length(shortest) {
+              True -> Broke(ordering:, broke_after:, run:)
+              False -> best
             }
         }
-      })
-  }
+    }
+  })
 }
 
 /// The shortest prefix of `ordering` whose run fails `invariant`. An empty
@@ -234,11 +235,6 @@ fn group(
         }
       })
   }
-}
-
-/// The projection for "did every ordering land in the same state".
-pub fn final_state(run: Run(state, output)) -> state {
-  run.state
 }
 
 /// How a test wants the machine's timer outputs recognised.
@@ -365,13 +361,7 @@ pub fn advance(
   Clock(state, input, output, timer),
   Stall(state, input, output, timer),
 ) {
-  fire_until(
-    machine,
-    timers,
-    clock,
-    clock.now_ms + int.max(0, by_ms),
-    max_firings,
-  )
+  fire_until(machine, timers, clock, clock.now_ms + int.max(0, by_ms), 0)
 }
 
 /// Move time to the soonest armed deadline and fire it, along with anything
@@ -418,7 +408,7 @@ fn fire_until(
   timers: Timers(input, output, timer),
   clock: Clock(state, input, output, timer),
   deadline: Int,
-  fuel: Int,
+  fired: Int,
 ) -> Result(
   Clock(state, input, output, timer),
   Stall(state, input, output, timer),
@@ -426,14 +416,14 @@ fn fire_until(
   case clock.armed {
     [] -> Ok(Clock(..clock, now_ms: deadline))
     [next, ..rest] ->
-      case next.at_ms <= deadline, fuel > 0 {
+      case next.at_ms <= deadline, fired < max_firings {
         False, _ -> Ok(Clock(..clock, now_ms: deadline))
-        // Out of fuel with one still due, so time stops here rather than
+        // The cap is spent with one still due, so time stops here rather than
         // stepping over a deadline it never fired.
         True, False ->
           Error(Stalled(
             clock:,
-            fired: max_firings - fuel,
+            fired:,
             still_due: list.count(clock.armed, fn(entry) {
               entry.at_ms <= deadline
             }),
@@ -441,13 +431,13 @@ fn fire_until(
         True, True -> {
           // Spent before it is delivered, so a machine that re-arms on fire
           // replaces nothing and one that does not is left with nothing.
-          let fired = Clock(..clock, now_ms: next.at_ms, armed: rest)
+          let stepped = Clock(..clock, now_ms: next.at_ms, armed: rest)
           fire_until(
             machine,
             timers,
-            feed(machine, timers, fired, next.fires),
+            feed(machine, timers, stepped, next.fires),
             deadline,
-            fuel - 1,
+            fired + 1,
           )
         }
       }

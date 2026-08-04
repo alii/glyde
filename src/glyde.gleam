@@ -26,15 +26,15 @@
 ////
 //// A handler is given the bot's state and says what happens next: usually
 //// `continue` with the new one, since Gleam has no mutable cell to close over.
-//// `try` and `attempt` describe a request and carry on once the loop has made
-//// it, so a handler never blocks on the network itself. `when` guards the rest
+//// `do` describes a request and carries on once the loop has made it, so a
+//// handler never blocks on the network itself. `when` guards the rest
 //// of the handler behind a condition. Handlers run in the order they were
 //// added, each seeing what the one before left. Nothing to remember passes
 //// `Nil`.
 ////
 //// `glyde/client` is the layer below, for driving the machine yourself.
 
-import gleam/http/request
+import gleam/int
 import gleam/list
 import gleam/result
 import glyde/event
@@ -47,8 +47,10 @@ import glyde/internal/version
 import glyde/message
 import glyde/ready
 import glyde/rest
-import glyde/rest/body
+import glyde/rest/error
+import glyde/rest/limiter
 import glyde/status
+import glyde/token
 import glyde/transport
 import glyde/transport/erlang as erlang_transport
 
@@ -75,8 +77,37 @@ pub type ChannelId =
 pub type Call(a) =
   rest.Call(a)
 
-pub type CallFailure =
-  status.CallFailure
+/// Why a REST call did not produce an answer. Discord answered and said no,
+/// nothing answered at all, or glyde never sent it.
+pub type CallFailure {
+  /// Discord answered, with a non-2xx or a body its own decoder would not
+  /// take. `glyde/rest/error` is where the questions about it live. A 429 has
+  /// already been waited out and retried before it arrives here.
+  Refused(rest.Failure)
+  /// The request never got an answer: no route to the host, a timeout, a proxy
+  /// speaking something that is not HTTP.
+  Unreachable(transport.Unreachable)
+  /// Never sent. The rate limiter wanted it held for `wait_ms`, which is longer
+  /// than a handler may keep the events queued behind it waiting, so it was
+  /// failed rather than slept on. Discord is fine; try again later.
+  WouldBlock(wait_ms: Int)
+  /// Never sent, and waiting would not help: the limiter will not send it at
+  /// all. In practice the invalid-request budget is spent.
+  Withheld(limiter.Refusal)
+}
+
+pub fn describe_failure(failure: CallFailure) -> String {
+  case failure {
+    Refused(refusal) -> error.describe(refusal)
+    Unreachable(reason) -> transport.describe(reason)
+    WouldBlock(wait_ms:) ->
+      "not sent, the rate limiter wants " <> int.to_string(wait_ms) <> "ms"
+    Withheld(limiter.InvalidBudgetSpent) ->
+      "not sent, the invalid-request budget is spent"
+    Withheld(limiter.Backlogged) -> "not sent, too many calls waiting"
+    Withheld(limiter.DuplicateTicket) -> "not sent, duplicate ticket"
+  }
+}
 
 pub type Failure =
   rest.Failure
@@ -104,13 +135,13 @@ pub opaque type Bot(state) {
 /// something goes wrong. For sharding, compression or a presence at connect
 /// time, build a `gateway.Config` and drive it with `glyde/client`.
 pub fn new(
-  token token: String,
+  token secret: String,
   state state: state,
   intents intents: Intents,
 ) -> Bot(state) {
   Bot(
-    gateway: gateway.config(token:, intents:),
-    rest: rest.config(rest.bot(token)),
+    gateway: gateway.config(token: token.new(secret), intents:),
+    rest: rest.config(rest.bot(secret)),
     state:,
     listeners: [],
     status: status.printing,
@@ -189,14 +220,13 @@ pub fn with_transport(bot: Bot(state), transport: Transport) -> Bot(state) {
 /// gateway serviced while it waits, which a handler blocking on its own could
 /// not.
 pub opaque type Next(state) {
-  // A reader over what only the bot knows, so `attempt` can build the request
+  // A reader over what only the bot knows, so `do` can build the request
   // without a `Bot` in the handler's hands.
   Next(run: fn(Env) -> runtime.Step(state))
 }
 
-type Env {
-  Env(rest: rest.Config, status: fn(status.Status) -> Nil)
-}
+type Env =
+  rest.Config
 
 /// Done with this event: here is the state for the next one.
 pub fn continue(state: state) -> Next(state) {
@@ -225,15 +255,14 @@ pub fn when(
 /// `use` fits:
 ///
 /// ```gleam
-/// use answer <- glyde.do(guild.get(guild_id))
+/// use answer <- glyde.do(guild.get(guild_id, with_counts: False))
 /// ```
 pub fn do(
   call: Call(a),
   then: fn(Result(a, CallFailure)) -> Next(state),
 ) -> Next(state) {
   Next(fn(env: Env) {
-    let built = rest.request(env.rest, call)
-    let built = request.set_body(built, body.to_bits(built.body))
+    let built = rest.request_bytes(env, call)
     runtime.Perform(request: built, route: rest.route(call), resume: fn(answer) {
       call |> answered(answer) |> then() |> lower(env)
     })
@@ -245,20 +274,25 @@ fn lower(next: Next(state), env: Env) -> runtime.Step(state) {
 }
 
 fn answered(call: Call(a), answer: runtime.Answer) -> Result(a, CallFailure) {
-  use response <- result.try(answer)
-  rest.response(
-    call,
-    status: response.status,
-    headers: response.headers,
-    body: response.body,
-  )
-  |> result.map_error(status.Refused)
+  case answer {
+    Error(runtime.Unreachable(e)) -> Error(Unreachable(e))
+    Error(runtime.WouldBlock(ms)) -> Error(WouldBlock(ms))
+    Error(runtime.Withheld(r)) -> Error(Withheld(r))
+    Ok(response) ->
+      rest.response(
+        call,
+        status: response.status,
+        headers: response.headers,
+        body: response.body,
+      )
+      |> result.map_error(Refused)
+  }
 }
 
 /// Connect, and keep connected until the bot halts. Blocks: the loop is this
 /// process, and `main` returning takes the VM with it.
 pub fn run(bot: Bot(state)) -> Nil {
-  let env = Env(rest: bot.rest, status: bot.status)
+  let env = bot.rest
   runtime.run(
     config: bot.gateway,
     transport: bot.transport,

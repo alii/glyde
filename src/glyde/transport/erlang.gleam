@@ -32,47 +32,37 @@ fn dial(url: String) -> Socket {
 /// `transport.Socket` hands a socket back from `turn` alone, so the ending
 /// socket that a write, a close and a drop each produce goes nowhere and the
 /// next `turn` runs on this one. Each discard below says what covers it.
-fn over(live: websocket.Socket) -> Socket {
+fn over(socket: websocket.Socket) -> Socket {
   transport.Socket(
     // A write that failed has already torn the transport down, so the next
     // `turn` reads that and reports the close. The reason goes with the socket
     // dropped here, and is not missed: the runtime reports one only for a dial
     // that never opened, which a write says this one did.
-    send: fn(text) { websocket.live(websocket.send_text(live, text)) },
+    send: fn(text) { websocket.live(websocket.send_text(socket, text)) },
+    // The frame is out and the transport is down, so the next `turn` reads a
+    // closed socket at once rather than waiting out its timeout.
     close: fn(code) {
-      case websocket.close_code(code) {
-        // The frame is out and the transport is down, so the next `turn` reads
-        // a closed socket at once rather than waiting out its timeout.
-        Ok(code) -> {
-          let _ = websocket.close(live, code, "")
-          Nil
-        }
-        // Not a code a client may send, so there is no frame to write. The
-        // socket still has to come down: `transport.Socket` promises that.
-        Error(_) -> {
-          let _ = websocket.drop(live)
-          Nil
-        }
-      }
+      let _ = websocket.close(socket, code, "")
+      Nil
     },
     // `glyde` forgets the dial in the same step it drops it, so nothing turns
     // this socket again.
     drop: fn() {
-      let _ = websocket.drop(live)
+      let _ = websocket.drop(socket)
       Nil
     },
     turn: fn(in_ms) {
       // `transport.Socket` promises a turn blocks until the timeout is up. A
       // finished socket answers at once, so waiting it out here is what stops
       // a caller that keeps turning from spinning the CPU.
-      case websocket.finished(live) {
+      case websocket.finished(socket) {
         True -> {
           timing.sleep(in_ms)
-          #(over(live), [])
+          #(over(socket), [])
         }
         False -> {
-          let #(live, events) = websocket.poll(live, timeout: in_ms)
-          #(over(live), events)
+          let #(socket, events) = websocket.poll(socket, timeout: in_ms)
+          #(over(socket), events)
         }
       }
     },
@@ -104,14 +94,14 @@ fn unreachable(failure: httpc.HttpError) -> transport.Unreachable {
   case failure {
     httpc.FailedToConnect(ip4:, ip6:) ->
       transport.ConnectFailed(
-        "IPv4 " <> refused(ip4) <> ", IPv6 " <> refused(ip6),
+        "IPv4 " <> connect_detail(ip4) <> ", IPv6 " <> connect_detail(ip6),
       )
     httpc.ResponseTimeout -> transport.TimedOut
     httpc.InvalidUtf8Response -> transport.Unreadable
   }
 }
 
-fn refused(error: httpc.ConnectError) -> String {
+fn connect_detail(error: httpc.ConnectError) -> String {
   case error {
     httpc.Posix(code:) -> code
     httpc.TlsAlert(code:, detail:) -> code <> ", " <> detail
@@ -120,5 +110,5 @@ fn refused(error: httpc.ConnectError) -> String {
 
 /// Run `attempt` and hand back whatever it raised as words, since a raise from
 /// a platform package is the one failure Gleam's types cannot show.
-@external(erlang, "glyde_httpc_ffi", "rescue")
+@external(erlang, "glyde_transport_ffi", "rescue")
 fn rescue(attempt: fn() -> a) -> Result(a, String)

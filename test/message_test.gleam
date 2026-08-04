@@ -14,9 +14,7 @@ import glyde/field.{Absent, Null, Present}
 import glyde/flags
 import glyde/id
 import glyde/mentions
-import glyde/message.{
-  type Message, IntNonce, StringNonce, UnknownMessageType, UnknownReference,
-}
+import glyde/message.{type Message, IntNonce, StringNonce}
 import glyde/rest/body
 
 /// The smallest payload Discord actually sends for a message.
@@ -161,7 +159,7 @@ pub fn explicit_nulls_do_not_fail_the_message_test() {
     "reactions", "sticker_items", "mention_channels", "guild_id", "member",
     "webhook_id", "application_id", "flags", "nonce", "position", "thread",
     "message_reference", "content", "pinned", "tts", "mention_everyone",
-    "timestamp", "type",
+    "timestamp",
   ]
   let nulls = list.map(nullable, fn(key) { #(key, "null") })
   list.each(nulls, fn(override) {
@@ -252,20 +250,21 @@ pub fn message_type_round_trips_across_the_whole_range_test() {
     let decoded = message.message_type_from_int(wire)
     case set.contains(holes, wire) {
       True -> {
-        assert decoded == UnknownMessageType(wire)
+        assert decoded == None
       }
       False -> {
-        assert decoded != UnknownMessageType(wire)
+        let assert Some(named) = decoded
+        assert message.message_type_to_int(named) == wire
       }
     }
-    assert message.message_type_to_int(decoded) == wire
   })
 }
 
-pub fn unknown_message_type_survives_test() {
-  assert message.message_type_from_int(9999) == UnknownMessageType(9999)
-  assert message.message_type_to_int(UnknownMessageType(9999)) == 9999
-  assert decode_msg([#("type", "9999")]).type_ == UnknownMessageType(9999)
+/// A `type` this build has no name for is a glyde bug, so it fails the decode
+/// rather than making every caller unwrap.
+pub fn unmodelled_message_type_fails_test() {
+  assert message.message_type_from_int(9999) == None
+  let assert Error(_) = parse(msg([#("type", "9999")]))
 }
 
 pub fn named_message_types_match_the_wire_test() {
@@ -286,12 +285,11 @@ pub fn named_message_types_match_the_wire_test() {
   ]
   list.each(rows, fn(row) {
     let #(wire, expected) = row
-    assert message.message_type_from_int(wire) == expected
+    assert message.message_type_from_int(wire) == Some(expected)
     assert message.message_type_to_int(expected) == wire
   })
 }
 
-/// A wrong guess costs a 400 that reads like a permissions bug.
 pub fn is_deletable_table_test() {
   let undeletable = [
     message.RecipientAdd,
@@ -300,7 +298,6 @@ pub fn is_deletable_table_test() {
     message.ChannelNameChange,
     message.ChannelIconChange,
     message.ThreadStarterMessage,
-    UnknownMessageType(9999),
   ]
   let deletable = [
     message.DefaultMessage, message.ReplyMessage, message.ChatInputCommand,
@@ -421,16 +418,13 @@ pub fn message_reference_without_a_message_id_decodes_test() {
 }
 
 pub fn message_reference_type_round_trips_test() {
-  let rows = [
-    #(0, message.DefaultReference),
-    #(1, message.ForwardReference),
-    #(99, UnknownReference(99)),
-  ]
+  let rows = [#(0, message.DefaultReference), #(1, message.ForwardReference)]
   list.each(rows, fn(row) {
     let #(wire, expected) = row
-    assert message.message_reference_type_from_int(wire) == expected
+    assert message.message_reference_type_from_int(wire) == Some(expected)
     assert message.message_reference_type_to_int(expected) == wire
   })
+  assert message.message_reference_type_from_int(99) == None
 }
 
 pub fn reaction_decodes_test() {
@@ -449,7 +443,7 @@ pub fn reaction_decodes_test() {
     == message.ReactionCountDetails(burst: 1, normal: 2)
   assert reaction.me
   assert !reaction.me_burst
-  assert reaction.emoji.kind == emoji.Unicode("🔥")
+  assert reaction.emoji == emoji.Unicode("🔥")
   assert reaction.burst_colors == ["ff0000"]
 }
 
@@ -493,8 +487,8 @@ pub fn reaction_on_a_deleted_custom_emoji_decodes_test() {
       #("reactions", "[{\"count\":1,\"emoji\":{\"id\":\"77\",\"name\":null}}]"),
     ])
   let assert [reaction] = value.reactions
-  assert reaction.emoji.kind
-    == emoji.Custom(id: id.from_string("77"), name: None)
+  assert reaction.emoji
+    == emoji.Custom(id: id.from_string("77"), name: None, animated: False)
 }
 
 /// Discord splices `member` into each element of `mentions` rather than
@@ -566,6 +560,29 @@ pub fn sticker_items_decode_test() {
     ]
 }
 
+/// `type` on a channel mention and `format_type` on a sticker item are always
+/// sent, so an unmodelled value is a glyde bug that fails the decode.
+pub fn unmodelled_mention_and_sticker_discriminators_fail_test() {
+  let assert Error(_) =
+    parse(
+      msg([
+        #(
+          "mention_channels",
+          "[{\"id\":\"5\",\"guild_id\":\"6\",\"type\":99,\"name\":\"x\"}]",
+        ),
+      ]),
+    )
+  let assert Error(_) =
+    parse(
+      msg([
+        #(
+          "sticker_items",
+          "[{\"id\":\"11\",\"name\":\"x\",\"format_type\":99}]",
+        ),
+      ]),
+    )
+}
+
 pub fn thread_and_position_decode_test() {
   let value =
     decode_msg([
@@ -603,14 +620,17 @@ pub fn components_decode_test() {
 }
 
 /// The message belongs to another bot, so an unmodelled component must not
-/// sink it.
+/// sink it: it is dropped from the list, and the row beside it survives.
 pub fn a_components_v2_message_from_another_bot_decodes_test() {
   let value =
     decode_msg([
       #("flags", "32768"),
-      #("components", "[{\"type\":17,\"accent_color\":1}]"),
+      #(
+        "components",
+        "[{\"type\":17,\"accent_color\":1},{\"type\":1,\"components\":[]}]",
+      ),
     ])
-  assert list.length(value.components) == 1
+  assert value.components == [component.ActionRow(id: None, components: [])]
   assert message.has_flag(value.flags, message.IsComponentsV2)
 }
 
@@ -729,17 +749,11 @@ pub fn the_standalone_message_codecs_take_a_whole_float_test() {
   assert json.parse("19.5", message.message_type_decoder()) |> result.is_error
 }
 
-/// A caller echoing a message back must not drop an unknown value to zero.
-pub fn an_unknown_message_enum_round_trips_test() {
-  let assert Ok(kind) = json.parse("999", message.message_type_decoder())
-  assert kind == UnknownMessageType(999)
-  assert json.to_string(message.message_type_to_json(kind)) == "999"
-
-  let assert Ok(reference) =
-    json.parse("7", message.message_reference_type_decoder())
-  assert reference == UnknownReference(7)
-  assert json.to_string(message.message_reference_type_to_json(reference))
-    == "7"
+/// A value this build has no name for fails the decode.
+pub fn an_unmodelled_message_enum_fails_test() {
+  assert json.parse("999", message.message_type_decoder()) |> result.is_error
+  assert json.parse("7", message.message_reference_type_decoder())
+    |> result.is_error
 }
 
 fn created(payload: message.Draft) -> String {
@@ -1218,10 +1232,9 @@ pub fn keeping_attachments_uploads_nothing_test() {
 }
 
 pub fn bulk_delete_lists_the_ids_test() {
-  let body =
-    message.BulkDelete(messages: [id.from_string("1"), id.from_string("2")])
+  let ids = [id.from_string("1"), id.from_string("2")]
 
-  assert payload_json(message.bulk_delete_body(body))
+  assert payload_json(message.bulk_delete_body(ids))
     == "{\"messages\":[\"1\",\"2\"]}"
 }
 
@@ -1229,7 +1242,7 @@ pub fn bulk_delete_lists_the_ids_test() {
 pub fn bulk_delete_has_a_body_test() {
   let ids = [id.from_string("1"), id.from_string("2")]
 
-  assert message.bulk_delete_body(message.BulkDelete(messages: ids))
+  assert message.bulk_delete_body(ids)
     == body.json([#("messages", json.array(ids, id.to_json))])
 }
 
@@ -1282,19 +1295,17 @@ pub fn from_carries_what_a_create_can_set_test() {
     <> "\"flags\":4100}"
 }
 
-pub fn from_carries_components_and_components_v2_test() {
+pub fn from_carries_components_test() {
   let heard =
     received(
       "",
-      "\"components\":[{\"type\":10,\"id\":1,\"content\":\"# hi\"}],"
-        <> "\"flags\":32768,",
+      "\"components\":[{\"type\":1,\"components\":[]}]," <> "\"flags\":32768,",
     )
   let echoed = message.redraft(heard)
 
   assert echoed.components == heard.components
   assert created(echoed)
-    == "{\"components\":[{\"content\":\"# hi\",\"id\":1,\"type\":10}],"
-    <> "\"flags\":32768}"
+    == "{\"components\":[{\"type\":1,\"components\":[]}]," <> "\"flags\":32768}"
 }
 
 /// Without MESSAGE_CONTENT the content arrives as "", and a create that sends

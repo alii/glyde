@@ -16,7 +16,7 @@ import gleam/order.{type Order}
 import gleam/string
 import glyde/internal/decode_error
 import glyde/rest/headers
-import glyde/rest/limiter.{type Scope, GlobalScope, SharedScope}
+import glyde/rest/limiter.{type Scope, GlobalScope, SharedScope, UserScope}
 import glyde/wire
 
 /// Discord's `code` field. Open, not an enum: Discord calls its own table
@@ -306,15 +306,15 @@ pub type OAuthError {
   UnknownOAuthError(String)
 }
 
-fn known_oauth_error(value: String) -> Option(OAuthError) {
+fn oauth_error_from_string(value: String) -> OAuthError {
   case value {
-    "invalid_request" -> Some(InvalidRequest)
-    "invalid_client" -> Some(InvalidClient)
-    "invalid_grant" -> Some(InvalidGrant)
-    "unauthorized_client" -> Some(UnauthorizedClient)
-    "unsupported_grant_type" -> Some(UnsupportedGrantType)
-    "invalid_scope" -> Some(InvalidScope)
-    _ -> None
+    "invalid_request" -> InvalidRequest
+    "invalid_client" -> InvalidClient
+    "invalid_grant" -> InvalidGrant
+    "unauthorized_client" -> UnauthorizedClient
+    "unsupported_grant_type" -> UnsupportedGrantType
+    "invalid_scope" -> InvalidScope
+    _ -> UnknownOAuthError(value)
   }
 }
 
@@ -422,46 +422,38 @@ pub fn not_text(
   NotText(status:, content_type: headers.header(sent, "content-type"), bytes:)
 }
 
+/// A 2xx whose body did not fit the decoder. Keeps the raw text, which the
+/// stdlib error drops.
+pub fn malformed(error: json.DecodeError, raw: String) -> ApiError {
+  Malformed(DecodeFailure(error:, raw:))
+}
+
 /// Classify a non-2xx by the shape of its body.
 pub fn from_response(
   status status: Int,
   headers sent: List(Header),
   body body: String,
 ) -> ApiError {
-  let unreadable = fn() {
-    Opaque(status:, content_type: headers.header(sent, "content-type"), body:)
+  case json.parse(body, shape_decoder()) {
+    Error(_) ->
+      Opaque(status:, content_type: headers.header(sent, "content-type"), body:)
+
+    Ok(RateLimitShape(retry_after:, global:, code:)) ->
+      RateLimited(
+        status:,
+        limit: RateLimit(
+          retry_after:,
+          scope: headers.resolve_scope(sent, headers.RateLimitBody(global:)),
+          code:,
+          bucket: headers.header(sent, "x-ratelimit-bucket"),
+        ),
+      )
+
+    Ok(DiscordShape(code:, message:, fields:)) ->
+      Discord(status:, code: ErrorCode(code), message:, fields:, raw: body)
+
+    Ok(OAuthShape(error:, description:)) -> OAuth(status:, error:, description:)
   }
-
-  case json.parse(body, decode.dynamic) {
-    Error(_) -> unreadable()
-    Ok(document) ->
-      case decode.run(document, shape_decoder()) {
-        Ok(RateLimitShape(retry_after:, global:, code:)) ->
-          RateLimited(
-            status:,
-            limit: RateLimit(
-              retry_after:,
-              scope: headers.resolve_scope(sent, headers.RateLimitBody(global:)),
-              code:,
-              bucket: headers.header(sent, "x-ratelimit-bucket"),
-            ),
-          )
-
-        Ok(DiscordShape(code:, message:, fields:)) ->
-          Discord(status:, code: ErrorCode(code), message:, fields:, raw: body)
-
-        Ok(OAuthShape(error:, description:)) ->
-          OAuth(status:, error:, description:)
-
-        Ok(UnknownShape) | Error(_) -> unreadable()
-      }
-  }
-}
-
-/// Flatten Discord's nested `errors` object into one entry per rejected field,
-/// sorted by path: decoding loses the order Discord wrote the keys in.
-fn field_errors(errors: Dynamic) -> List(FieldError) {
-  walk(errors, [])
 }
 
 /// Render a path as `embed.fields[0].value`. The empty path is the request as
@@ -513,7 +505,11 @@ pub fn retry_advice(error: ApiError) -> Retry {
 pub fn counts_as_invalid_request(error: ApiError) -> Bool {
   case error {
     // Discord excludes shared-scope 429s: somebody else's traffic.
-    RateLimited(_, limit) -> limit.scope != SharedScope
+    RateLimited(_, limit) ->
+      case limit.scope {
+        SharedScope -> False
+        GlobalScope | UserScope -> True
+      }
     Discord(status:, ..)
     | OAuth(status:, ..)
     | Opaque(status:, ..)
@@ -559,7 +555,8 @@ pub fn is_token_fatal(error: ApiError) -> Bool {
 pub fn is_path_token_dead(error: ApiError) -> Bool {
   case error {
     Discord(code:, ..) -> classify(code) == PathTokenDead
-    _ -> False
+    RateLimited(..) | OAuth(..) | Opaque(..) | NotText(..) | Malformed(_) ->
+      False
   }
 }
 
@@ -571,17 +568,12 @@ type Shape {
   RateLimitShape(retry_after: Float, global: Bool, code: Option(ErrorCode))
   DiscordShape(code: Int, message: String, fields: List(FieldError))
   OAuthShape(error: OAuthError, description: Option(String))
-  UnknownShape
 }
 
 /// Rate limit first: a 429 body has a `message` too, so it would otherwise
 /// decode as an ordinary Discord error and lose its `retry_after`.
 fn shape_decoder() -> Decoder(Shape) {
-  decode.one_of(rate_limit_shape(), or: [
-    discord_shape(),
-    oauth_shape(),
-    decode.success(UnknownShape),
-  ])
+  decode.one_of(rate_limit_shape(), or: [discord_shape(), oauth_shape()])
 }
 
 fn rate_limit_shape() -> Decoder(Shape) {
@@ -600,7 +592,7 @@ fn discord_shape() -> Decoder(Shape) {
   use code <- wire.int_field("code", 0)
   use errors <- wire.opt_field("errors", decode.dynamic)
   let fields = case errors {
-    Some(errors) -> field_errors(errors)
+    Some(errors) -> walk(errors, [])
     None -> []
   }
   decode.success(DiscordShape(code:, message:, fields:))
@@ -609,7 +601,7 @@ fn discord_shape() -> Decoder(Shape) {
 fn oauth_shape() -> Decoder(Shape) {
   use error <- decode.field(
     "error",
-    wire.string_enum_with_fallback(known_oauth_error, UnknownOAuthError),
+    decode.string |> decode.map(oauth_error_from_string),
   )
   use description <- wire.opt_field("error_description", decode.string)
   decode.success(OAuthShape(error:, description:))
@@ -624,6 +616,8 @@ type Node {
   Ignored
 }
 
+/// Flatten Discord's nested `errors` object into one entry per rejected field,
+/// sorted by path: decoding loses the order Discord wrote the keys in.
 fn walk(node: Dynamic, path: List(PathSegment)) -> List(FieldError) {
   case decode.run(node, node_decoder()) {
     Ok(Leaf(code:, message:)) -> [FieldError(path:, code:, message:)]

@@ -3,6 +3,7 @@ import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import glyde/gateway/command
+import glyde/gateway/frame
 import glyde/gateway/presence
 import glyde/id
 
@@ -39,7 +40,7 @@ fn limit(value: Int) -> command.Limit {
 /// The text a command serialises to. The opcode rides on the `Outbound`
 /// beside it, and these tests read it back off the wire form.
 fn encoded(wanted: command.Command) -> String {
-  command.encode(wanted).text
+  frame.outbound_text(command.encode(wanted))
 }
 
 /// An op 3 payload with only the activities varying.
@@ -212,71 +213,64 @@ pub fn a_null_channel_is_the_disconnect_test() {
 /// The whole member list is its own request, and it is the only one that puts
 /// an empty query and a limit of 0 on the wire.
 pub fn requesting_every_member_test() {
-  assert encoded(
-      command.RequestGuildMembers(command.AllMembers(
-        guild: guild(),
-        nonce: None,
-      )),
-    )
+  assert encoded(command.RequestGuildMembers(
+      guild: guild(),
+      nonce: None,
+      select: command.All,
+    ))
     == "{\"op\":8,\"d\":{\"guild_id\":\"41771983423143937\",\"query\":\"\",\"limit\":0}}"
 }
 
 pub fn requesting_members_by_prefix_test() {
-  assert encoded(
-      command.RequestGuildMembers(command.ByPrefix(
-        guild: guild(),
-        prefix: "al",
-        limit: limit(10),
-        nonce: nonce("page-1"),
-      )),
-    )
+  assert encoded(command.RequestGuildMembers(
+      guild: guild(),
+      nonce: nonce("page-1"),
+      select: command.ByPrefix(prefix: "al", limit: limit(10)),
+    ))
     == "{\"op\":8,\"d\":{\"guild_id\":\"41771983423143937\",\"query\":\"al\",\"limit\":10,\"nonce\":\"page-1\"}}"
 }
 
 /// Discord accepts a bare snowflake too, and one shape is enough.
 pub fn requesting_one_member_by_id_test() {
-  assert encoded(
-      command.RequestGuildMembers(command.ByIds(
-        guild: guild(),
-        users: ids([user()]),
-        nonce: None,
-      )),
-    )
+  assert encoded(command.RequestGuildMembers(
+      guild: guild(),
+      nonce: None,
+      select: command.ByIds(users: ids([user()])),
+    ))
     == "{\"op\":8,\"d\":{\"guild_id\":\"41771983423143937\",\"user_ids\":[\"80351110224678912\"],\"limit\":0}}"
 }
 
 pub fn requesting_several_members_by_id_test() {
-  assert encoded(
-      command.RequestGuildMembers(command.ByIds(
-        guild: guild(),
+  assert encoded(command.RequestGuildMembers(
+      guild: guild(),
+      nonce: nonce("chunk-7"),
+      select: command.ByIds(
         users: ids([user(), id.from_string("53908099506183680")]),
-        nonce: nonce("chunk-7"),
-      )),
-    )
+      ),
+    ))
     == "{\"op\":8,\"d\":{\"guild_id\":\"41771983423143937\",\"user_ids\":[\"80351110224678912\",\"53908099506183680\"],\"limit\":0,\"nonce\":\"chunk-7\"}}"
 }
 
 /// An empty list asks for nobody, and glyde does not invent one.
 pub fn an_empty_id_list_stays_empty_test() {
-  assert encoded(
-      command.RequestGuildMembers(command.ByIds(
-        guild: guild(),
-        users: ids([]),
-        nonce: None,
-      )),
-    )
+  assert encoded(command.RequestGuildMembers(
+      guild: guild(),
+      nonce: None,
+      select: command.ByIds(users: ids([])),
+    ))
     == "{\"op\":8,\"d\":{\"guild_id\":\"41771983423143937\",\"user_ids\":[],\"limit\":0}}"
 }
 
 /// Discord answers a null nonce with a 4002 close.
 pub fn an_unset_nonce_is_left_out_test() {
   let table = [
-    command.AllMembers(guild: guild(), nonce: None),
-    command.ByPrefix(guild: guild(), prefix: "a", limit: limit(1), nonce: None),
-    command.ByIds(guild: guild(), users: ids([user()]), nonce: None),
+    command.All,
+    command.ByPrefix(prefix: "a", limit: limit(1)),
+    command.ByIds(users: ids([user()])),
   ]
-  list.each(table, fn(request) {
-    let encoded = encoded(command.RequestGuildMembers(request))
+  list.each(table, fn(select) {
+    let encoded =
+      encoded(command.RequestGuildMembers(guild: guild(), nonce: None, select:))
     assert !string.contains(encoded, "nonce")
   })
 }
@@ -285,14 +279,11 @@ pub fn an_unset_nonce_is_left_out_test() {
 
 /// An unescaped quote inside user text would break the frame.
 pub fn quotes_in_user_text_are_escaped_test() {
-  assert encoded(
-      command.RequestGuildMembers(command.ByPrefix(
-        guild: guild(),
-        prefix: "a\"b\\c\nd",
-        limit: limit(1),
-        nonce: None,
-      )),
-    )
+  assert encoded(command.RequestGuildMembers(
+      guild: guild(),
+      nonce: None,
+      select: command.ByPrefix(prefix: "a\"b\\c\nd", limit: limit(1)),
+    ))
     == "{\"op\":8,\"d\":{\"guild_id\":\"41771983423143937\",\"query\":\"a\\\"b\\\\c\\nd\",\"limit\":1}}"
 }
 
@@ -322,7 +313,7 @@ pub fn a_request_names_at_most_100_ids_test() {
 }
 
 /// A prefix search starts at 1: the 0 that Discord reads as "every member" is
-/// `AllMembers`, and a search for nothing is a request nobody meant to send.
+/// `All`, and a search for nothing is a request nobody meant to send.
 pub fn a_prefix_search_asks_for_at_least_one_member_test() {
   let assert Ok(_) = command.limit(1)
   assert command.limit(0) == Error(command.LimitTooSmall(value: 0))
@@ -340,13 +331,11 @@ pub fn a_prefix_search_stops_at_100_members_test() {
 /// encoder has to put the bytes on the wire unchanged.
 pub fn a_multibyte_nonce_survives_encoding_test() {
   let encoded =
-    encoded(
-      command.RequestGuildMembers(command.ByIds(
-        guild: guild(),
-        users: ids([user()]),
-        nonce: nonce("café"),
-      )),
-    )
+    encoded(command.RequestGuildMembers(
+      guild: guild(),
+      nonce: nonce("café"),
+      select: command.ByIds(users: ids([user()])),
+    ))
   assert string.contains(encoded, "\"nonce\":\"café\"")
 }
 

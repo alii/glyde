@@ -42,6 +42,8 @@ import glyde/gateway/presence
 import glyde/intents
 import glyde/testing
 import glyde/testing/frames
+import glyde/token
+import glyde/websocket/sendcode
 
 /// The seed every scenario runs with. The expected `Armed` values below are
 /// jittered from it, so an adapter does not get to choose.
@@ -51,7 +53,7 @@ pub const seed: Int = 7
 /// an expectation traces back to `gateway.config`.
 pub fn config() -> gateway.Config {
   gateway.config(
-    token: frames.token,
+    token: token.new(frames.token),
     intents: intents.new([intents.Guilds, intents.GuildMessages]),
   )
 }
@@ -71,8 +73,13 @@ pub type Act {
   Dropped
   Armed(timer: Timer, in_ms: Int)
   Disarmed(timer: Timer)
-  /// A dispatch, or an event with nothing worth carrying, reached the host.
-  Emitted(event: String)
+  /// The projected `gateway.Ready` reached the host. The whole READY arrives
+  /// after it as `Emitted("READY")`.
+  EmittedReady
+  EmittedResumed
+  /// A dispatch reached the host, named as Discord names it, so a scenario's
+  /// expectation reads `Emitted("MESSAGE_CREATE")`.
+  Emitted(name: String)
   /// Its own act because the delay is the interesting part of it.
   Reconnecting(in_ms: Int, resuming: Bool)
   /// Its own act because "the host asked to stop" and "Discord refused with
@@ -95,13 +102,14 @@ pub type Sent {
   SentOther(op: Int)
 }
 
-fn sent(op: frame.Opcode) -> Sent {
+fn sent(op: frame.SendOp) -> Sent {
   case op {
-    frame.OpHeartbeat -> SentHeartbeat
-    frame.OpIdentify -> SentIdentify
-    frame.OpPresenceUpdate -> SentPresence
-    frame.OpResume -> SentResume
-    other -> SentOther(op: frame.opcode_to_int(other))
+    frame.SendHeartbeat -> SentHeartbeat
+    frame.SendIdentify -> SentIdentify
+    frame.SendPresenceUpdate -> SentPresence
+    frame.SendResume -> SentResume
+    frame.SendVoiceStateUpdate | frame.SendRequestGuildMembers ->
+      SentOther(op: frame.send_op_to_int(op))
   }
 }
 
@@ -140,26 +148,15 @@ pub fn acts(world: World) -> List(Act) {
 /// Record that an event reached the host: the one part of the trace a transport
 /// cannot see. `over_client` shows the one line it takes.
 pub fn saw(world: World, event: Event) -> World {
-  case event {
+  let act = case event {
+    gateway.Ready(..) -> EmittedReady
+    gateway.Resumed -> EmittedResumed
+    gateway.Dispatch(name:, seq: _, data: _) -> Emitted(name)
     gateway.Reconnecting(in_ms:, resuming:, why: _) ->
-      did(world, Reconnecting(in_ms:, resuming:))
-    gateway.Halted(reason:) -> did(world, Halted(reason:))
-    _ -> did(world, Emitted(event_name(event)))
+      Reconnecting(in_ms:, resuming:)
+    gateway.Halted(reason:) -> Halted(reason:)
   }
-}
-
-/// The name an `Emitted` act carries. A dispatch is named by its Discord
-/// event name, so a scenario's expectation reads `Emitted("MESSAGE_CREATE")`.
-/// `Reconnecting` and `Halted` never reach it: they have acts of their own,
-/// because what they carry is the point of them.
-pub fn event_name(event: Event) -> String {
-  case event {
-    gateway.Ready(..) -> "Ready"
-    gateway.Resumed -> "Resumed"
-    gateway.Dispatch(name:, seq: _, data: _) -> name
-    gateway.Reconnecting(..) -> "Reconnecting"
-    gateway.Halted(..) -> "Halted"
-  }
+  did(world, act)
 }
 
 /// The transport a scenario runs the adapter against. Opens nothing, writes
@@ -167,17 +164,19 @@ pub fn event_name(event: Event) -> String {
 pub fn recorder() -> client.Transport(World) {
   client.Transport(
     open: fn(world, conn, host, path) {
+      let host = gateway.host_to_string(host)
       World(..did(world, Dialled(host:, path:)), socket: Some(conn))
     },
     // The opcode only: the body of an IDENTIFY carries the token.
     send: fn(world, payload: frame.Outbound) {
-      did(world, Wrote(sent(payload.op)))
+      did(world, Wrote(sent(frame.outbound_op(payload))))
     },
     // The socket stays open: a runtime reports a close it asked for the same
     // way it reports one the peer sent.
     close: fn(world, code) {
-      let closing = option.map(world.socket, fn(conn) { #(conn, code) })
-      World(..did(world, Shut(code)), closing:)
+      let number = sendcode.to_int(code)
+      let closing = option.map(world.socket, fn(conn) { #(conn, number) })
+      World(..did(world, Shut(number)), closing:)
     },
     drop: fn(world) {
       World(..did(world, Dropped), socket: None, closing: None)
@@ -410,11 +409,21 @@ fn through_ready() -> List(Act) {
     Disarmed(gateway.Handshake),
     Disarmed(gateway.Reconnect),
     Disarmed(gateway.Commands),
-    Emitted("Ready"),
+    EmittedReady,
     // READY reaches the host twice: once projected to the four fields the
     // protocol needs, once whole.
     Emitted("READY"),
   ])
+}
+
+/// The beats that produce `through_ready()`: dial, connect, HELLO, READY.
+fn opening_beats() -> List(Beat) {
+  [
+    Waits(0),
+    Connects,
+    Delivers(frames.hello(interval_ms)),
+    Delivers(frames.ready(1, session_id, resume_host)),
+  ]
 }
 
 /// 1. The shard closed the socket itself. The runtime says so. The shard must
@@ -425,11 +434,7 @@ fn self_close_echo() -> Scenario {
     why: "an adapter that answers its own close with the connection the shard "
       <> "has moved on to, rather than the one the socket was opened with, "
       <> "kills the reconnect it just started and every flap then costs two",
-    beats: [
-      Waits(0),
-      Connects,
-      Delivers(frames.hello(interval_ms)),
-      Delivers(frames.ready(1, session_id, resume_host)),
+    beats: list.append(opening_beats(), [
       // Two heartbeats and no ack between them: the second finds the
       // connection a zombie and closes it with 4000, which keeps the session.
       Waits(10_000),
@@ -440,7 +445,7 @@ fn self_close_echo() -> Scenario {
       // the socket that is currently connecting.
       ShutConfirmed,
       Waits(1000),
-    ],
+    ]),
     // The echo landed on a finished connection and produced nothing. An adapter
     // answering with the live one would have torn the second dial down.
     expect: list.append(through_ready(), [
@@ -471,12 +476,7 @@ fn reentrant_handler() -> Scenario {
     why: "a command sent from inside a handler must go out after the batch "
       <> "that carried the event, not halfway through it against a shard "
       <> "that has already moved on",
-    beats: [
-      Waits(0),
-      Connects,
-      Delivers(frames.hello(interval_ms)),
-      Delivers(frames.ready(1, session_id, resume_host)),
-    ],
+    beats: opening_beats(),
     expect: list.append(through_ready(), [
       // Op 3, and it lands after both READY acts rather than between them.
       Wrote(SentPresence),
@@ -507,14 +507,10 @@ fn stale_fire() -> Scenario {
     name: "stale fire",
     why: "an adapter that invents a stamp instead of echoing the one it was "
       <> "armed with turns every late firing into a real one",
-    beats: [
-      Waits(0),
-      Connects,
-      Delivers(frames.hello(interval_ms)),
-      Delivers(frames.ready(1, session_id, resume_host)),
+    beats: list.append(opening_beats(), [
       StaleFire(gateway.Heartbeat),
       StaleFire(gateway.Handshake),
-    ],
+    ]),
     // Both firings changed nothing, so the trace stops at READY.
     expect: through_ready(),
     reentrant: None,
@@ -528,17 +524,13 @@ fn peer_close_resumes() -> Scenario {
     name: "peer close resumes",
     why: "a session that survives the socket must come back as op 6, because "
       <> "Discord allows 1000 identifies a day and resumes are unmetered",
-    beats: [
-      Waits(0),
-      Connects,
-      Delivers(frames.hello(interval_ms)),
-      Delivers(frames.ready(1, session_id, resume_host)),
+    beats: list.append(opening_beats(), [
       PeerShuts(Some(4000)),
       Waits(2000),
       Connects,
       Delivers(frames.hello(interval_ms)),
       Delivers(frames.resumed(2)),
-    ],
+    ]),
     expect: list.append(through_ready(), [
       // The peer had already closed, so there is nothing to write a close
       // frame into.
@@ -557,39 +549,34 @@ fn peer_close_resumes() -> Scenario {
       Disarmed(gateway.Handshake),
       Disarmed(gateway.Reconnect),
       Disarmed(gateway.Commands),
-      Emitted("Resumed"),
+      EmittedResumed,
       Emitted("RESUMED"),
     ]),
     reentrant: None,
   )
 }
 
-/// How a scenario went.
+/// How a scenario went. The scenario is carried whole so `describe` can render
+/// the expected trace for every verdict, not only the ones that stored a copy.
 pub type Report {
-  Report(name: String, why: String, verdict: Verdict)
+  Report(scenario: Scenario, verdict: Verdict)
 }
 
 pub type Verdict {
   Passed
-  /// The traces agree up to `at` and disagree there. `expected` and `got` are
+  /// The traces agree up to `at` and disagree there. `wanted` and `got` are
   /// `None` when one trace ran out.
-  Diverged(
-    at: Int,
-    expected: Option(Act),
-    got: Option(Act),
-    trace: List(Act),
-    wanted: List(Act),
-  )
+  Diverged(at: Int, wanted: Option(Act), got: Option(Act), trace: List(Act))
   /// A wait fired `testing.max_firings` timers and time had not reached the end
   /// of the beat. The run stopped there, so the trace is the one the spin left.
   Stalled(trace: List(Act))
   /// Beat `at` asked for something the world could not do: a socket that was
   /// never opened, or a close nobody was waiting on. The trace was still the
-  /// start of `wanted` when it happened, so either the beat is out of order or
-  /// the adapter never produced the act it needed. Which of the two it is
-  /// cannot be read off the trace, so neither is asserted. The run stopped
+  /// start of the expectation when it happened, so either the beat is out of
+  /// order or the adapter never produced the act it needed. Which of the two it
+  /// is cannot be read off the trace, so neither is asserted. The run stopped
   /// there rather than scoring the beats that did play.
-  Unplayable(at: Int, beat: Beat, trace: List(Act), wanted: List(Act))
+  Unplayable(at: Int, beat: Beat, trace: List(Act))
 }
 
 pub fn passed(report: Report) -> Bool {
@@ -632,25 +619,27 @@ pub fn run(scenario: Scenario, adapter: Adapter(bot)) -> Report {
     Error(failure) -> failure
     Ok(trial) -> compare(acts(adapter.world(trial.bot)), scenario.expect)
   }
-  Report(name: scenario.name, why: scenario.why, verdict:)
+  Report(scenario:, verdict:)
 }
 
 /// A one-line summary, and the two traces side by side when they disagree.
 pub fn describe(report: Report) -> String {
+  let scenario = report.scenario
   case report.verdict {
-    Passed -> "ok   " <> report.name
+    Passed -> "ok   " <> scenario.name
     Stalled(trace:) ->
       "STALL "
-      <> report.name
+      <> scenario.name
       <> "\n  "
-      <> report.why
+      <> scenario.why
       <> "\n  the clock kept firing timers and never reached the end.\n"
+      <> render("wanted", scenario.expect)
       <> render("got", trace)
-    Unplayable(at:, beat:, trace:, wanted:) ->
+    Unplayable(at:, beat:, trace:) ->
       "BLOCKED "
-      <> report.name
+      <> scenario.name
       <> "\n  "
-      <> report.why
+      <> scenario.why
       <> "\n  beat "
       <> int.to_string(at)
       <> ": "
@@ -658,21 +647,21 @@ pub fn describe(report: Report) -> String {
       <> " had nothing to act on and never ran.\n  The trace is still the "
       <> "start of what was expected, so either the beat is out of order or "
       <> "the adapter never produced the act it needed.\n"
-      <> render("wanted", wanted)
+      <> render("wanted", scenario.expect)
       <> render("got", trace)
-    Diverged(at:, expected:, got:, trace:, wanted:) ->
+    Diverged(at:, wanted:, got:, trace:) ->
       "FAIL "
-      <> report.name
+      <> scenario.name
       <> "\n  "
-      <> report.why
+      <> scenario.why
       <> "\n  act "
       <> int.to_string(at)
       <> ": wanted "
-      <> render_one(expected)
+      <> render_one(wanted)
       <> ", got "
       <> render_one(got)
       <> "\n"
-      <> render("wanted", wanted)
+      <> render("wanted", scenario.expect)
       <> render("got", trace)
   }
 }
@@ -692,27 +681,32 @@ fn render_one(act: Option(Act)) -> String {
   }
 }
 
-fn compare(got: List(Act), wanted: List(Act)) -> Verdict {
-  case first_difference(got, wanted, 0) {
+fn compare(trace: List(Act), wanted: List(Act)) -> Verdict {
+  case first_difference(trace, wanted, 0) {
     None -> Passed
-    Some(#(at, expected, actual)) ->
-      Diverged(at:, expected:, got: actual, trace: got, wanted:)
+    Some(Divergence(at:, wanted:, got:)) -> Diverged(at:, wanted:, got:, trace:)
   }
+}
+
+/// Where two traces stop agreeing. Named fields so `wanted` and `got` cannot be
+/// swapped by position at a call site.
+type Divergence {
+  Divergence(at: Int, wanted: Option(Act), got: Option(Act))
 }
 
 fn first_difference(
   got: List(Act),
   wanted: List(Act),
   at: Int,
-) -> Option(#(Int, Option(Act), Option(Act))) {
+) -> Option(Divergence) {
   case got, wanted {
     [], [] -> None
     [g, ..gs], [w, ..ws] if g == w -> first_difference(gs, ws, at + 1)
     _, _ ->
-      Some(#(
-        at,
-        list.first(wanted) |> option.from_result,
-        list.first(got) |> option.from_result,
+      Some(Divergence(
+        at:,
+        wanted: list.first(wanted) |> option.from_result,
+        got: list.first(got) |> option.from_result,
       ))
   }
 }
@@ -793,7 +787,7 @@ fn play(
 fn unplayable(world: World, at: Int, beat: Beat, wanted: List(Act)) -> Verdict {
   let trace = acts(world)
   case on_script(trace, wanted) {
-    True -> Unplayable(at:, beat:, trace:, wanted:)
+    True -> Unplayable(at:, beat:, trace:)
     False -> compare(trace, wanted)
   }
 }
@@ -804,7 +798,7 @@ fn unplayable(world: World, at: Int, beat: Beat, wanted: List(Act)) -> Verdict {
 fn on_script(trace: List(Act), wanted: List(Act)) -> Bool {
   case first_difference(trace, wanted, 0) {
     None -> True
-    Some(#(_, _, extra)) -> extra == None
+    Some(Divergence(got:, ..)) -> got == None
   }
 }
 

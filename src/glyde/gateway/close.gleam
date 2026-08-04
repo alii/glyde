@@ -10,6 +10,12 @@
 //// it, because the state machine has already moved on from that connection.
 
 import gleam/option.{type Option, None, Some}
+import glyde/websocket/sendcode
+
+/// The RFC-range-checked code that goes on the wire. Aliased so callers that
+/// already reason about closes need not name a second module.
+pub type SendCode =
+  sendcode.SendCode
 
 /// A close code Discord can send. Every number this module reasons about is
 /// named here, so `parse` is the only table of numbers and everything else
@@ -88,7 +94,7 @@ pub type Disposition {
   Fatal(Reason)
 }
 
-/// Classify a raw close code. The only place a close number is written down.
+/// Classify a raw close code.
 pub fn parse(code: Int) -> CloseCode {
   case code {
     1000 -> NormalClosure
@@ -154,10 +160,10 @@ fn disposition(code: CloseCode) -> Disposition {
 /// The code to send for an intent. 1000 tells Discord the session is over and
 /// marks the bot offline; anything else leaves it resumable, and 4000 reads as
 /// "unknown error".
-pub fn code(intent: Intent) -> Int {
+pub fn code(intent: Intent) -> SendCode {
   case intent {
-    Terminal -> 1000
-    Reconnect | FreshIdentify -> 4000
+    Terminal -> sendcode.shutdown
+    Reconnect | FreshIdentify -> sendcode.resume
   }
 }
 

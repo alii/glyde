@@ -25,7 +25,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import glyde/id.{type Id}
-import glyde/internal/url
+import glyde/internal/percent
 
 /// One key and one value, already encoded the way Discord reads it. Opaque so
 /// that every parameter on a call came through the constructors below.
@@ -42,7 +42,7 @@ pub fn to_string(params: List(Param)) -> Option(String) {
     _ ->
       params
       |> list.map(fn(param) {
-        url.percent_encode(param.key) <> "=" <> url.percent_encode(param.value)
+        percent.encode(param.key) <> "=" <> percent.encode(param.value)
       })
       |> string.join("&")
       |> Some
@@ -61,9 +61,10 @@ pub fn opt(
   }
 }
 
-/// One parameter, always sent, for a flag whose value is the point.
-pub fn one(key: String, value: String) -> List(Param) {
-  [Param(key, value)]
+/// One parameter, always sent. Same shape as `opt` and `repeat`: the encoder
+/// says how the value reaches the wire.
+pub fn one(key: String, value: a, with encode: fn(a) -> String) -> List(Param) {
+  [Param(key, encode(value))]
 }
 
 /// An array parameter as repeated keys, `?id=1&id=2`, which is Discord's
@@ -110,4 +111,22 @@ pub fn snowflake(value: Id(kind)) -> String {
 /// timestamp. `to_string` does the percent-encoding.
 pub fn text(value: String) -> String {
   value
+}
+
+/// Which way a snowflake-paged listing walks. One value: Discord picks a
+/// winner when both `before` and `after` are sent, so a stale one from the
+/// last page would silently reverse direction. `kind` is the id the endpoint
+/// pages by, so a user cursor will not compile into a guild-paged call.
+pub type Page(kind) {
+  Before(Id(kind))
+  After(Id(kind))
+}
+
+/// The `before`/`after` parameter a `Page` becomes. `None` emits nothing.
+pub fn page(cursor: Option(Page(kind))) -> List(Param) {
+  case cursor {
+    None -> []
+    Some(Before(id)) -> one("before", id, snowflake)
+    Some(After(id)) -> one("after", id, snowflake)
+  }
 }

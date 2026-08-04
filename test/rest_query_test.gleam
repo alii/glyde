@@ -38,13 +38,13 @@ pub fn nothing_produces_no_question_mark_test() {
 /// on the end of the URL.
 pub fn to_string_stands_alone_test() {
   assert query.to_string([]) == None
-  assert query.to_string(query.one("query", query.text("a&b=c")))
+  assert query.to_string(query.one("query", "a&b=c", query.text))
     == Some("query=a%26b%3Dc")
 }
 
 /// Keys are encoded as well as values.
 pub fn a_key_is_encoded_too_test() {
-  assert query.to_string(query.one("a b", query.text("c"))) == Some("a%20b=c")
+  assert query.to_string(query.one("a b", "c", query.text)) == Some("a%20b=c")
 }
 
 pub fn an_absent_parameter_is_omitted_test() {
@@ -64,8 +64,8 @@ pub fn zero_is_a_value_test() {
 
 /// Discord accepts `True`, `true` and `1`; glyde pins one spelling.
 pub fn booleans_are_lowercase_words_test() {
-  assert rendered(query.one("wait", query.flag(True))) == "?wait=true"
-  assert rendered(query.one("wait", query.flag(False))) == "?wait=false"
+  assert rendered(query.one("wait", True, query.flag)) == "?wait=true"
+  assert rendered(query.one("wait", False, query.flag)) == "?wait=false"
 }
 
 pub fn a_snowflake_is_its_digits_test() {
@@ -84,7 +84,7 @@ pub fn a_timestamp_travels_as_text_test() {
 
 /// Values are percent-encoded and the first pair carries no leading `&`.
 pub fn values_are_encoded_test() {
-  assert rendered(query.one("query", query.text("a&b=c"))) == "?query=a%26b%3Dc"
+  assert rendered(query.one("query", "a&b=c", query.text)) == "?query=a%26b%3Dc"
 }
 
 /// Discord's documented default for an array: repeated keys.
@@ -108,7 +108,7 @@ pub fn an_empty_array_emits_nothing_test() {
 pub fn parameters_keep_their_order_test() {
   let params =
     list.flatten([
-      query.one("wait", query.flag(True)),
+      query.one("wait", True, query.flag),
       query.opt(
         "thread_id",
         Some(id.from_string("670094564427005956")),

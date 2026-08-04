@@ -6,6 +6,7 @@ import gleam/http/response.{type Response}
 import gleam/int
 import gleam/json
 import gleam/list
+import gleam/option.{None}
 import gleeunit
 import glyde
 import glyde/embed
@@ -462,13 +463,13 @@ fn pong(msg: glyde.Message) -> glyde.Call(glyde.Message) {
 
 fn heard(
   message: glyde.Message,
-  answer: Result(a, status.CallFailure),
+  answer: Result(a, glyde.CallFailure),
 ) -> String {
   message.content
   <> ": "
   <> case answer {
     Ok(_) -> "ok"
-    Error(status.WouldBlock(wait_ms:)) ->
+    Error(glyde.WouldBlock(wait_ms:)) ->
       "would block for " <> int.to_string(wait_ms)
     Error(_) -> "failed"
   }
@@ -500,18 +501,19 @@ fn create(id: String, channel: String) -> transport.Event {
       #("channel_id", json.string(channel)),
       #("author", json.object([#("id", json.string("1000000000000000003"))])),
       #("content", json.string(id)),
+      #("type", json.int(0)),
     ]),
   ))
 }
 
 /// 4004, which glyde reads as fatal, so the loop stops instead of redialling.
 fn fatal() -> transport.Event {
-  transport.Closed(4004, "Authentication failed")
+  transport.Closed(4004, "Authentication failed", None)
 }
 
 fn created() -> Response(BitArray) {
   response.set_body(response.new(200), <<
-    "{\"id\":\"1000000000000000004\",\"channel_id\":\"1000000000000000002\",\"author\":{\"id\":\"1000000000000000003\"}}":utf8,
+    "{\"id\":\"1000000000000000004\",\"channel_id\":\"1000000000000000002\",\"author\":{\"id\":\"1000000000000000003\"},\"type\":0}":utf8,
   >>)
 }
 
@@ -738,7 +740,7 @@ fn busy(log: Booklet(List(Step))) -> transport.Transport {
         // never the one that finds the connection a zombie.
         chatter(2),
         chatter(3),
-        [transport.Closed(4004, "Authentication failed")],
+        [transport.Closed(4004, "Authentication failed", None)],
       ])
     },
     request: fn(_) { panic as "this bot never calls REST" },
@@ -770,7 +772,7 @@ fn ticking(
       booklet.set(clock, booklet.get(clock) + 25_000)
       case remaining {
         [] -> #(ticking(log, clock, []), [
-          transport.Closed(4004, "script ran out"),
+          transport.Closed(4004, "script ran out", None),
         ])
         [next, ..rest] -> #(ticking(log, clock, rest), next)
       }
@@ -801,7 +803,7 @@ fn drifted(log: Booklet(List(Step))) -> transport.Transport {
             json.object([#("channel_id", json.string("1000000000000000002"))]),
           )),
         ],
-        [transport.Closed(4004, "Authentication failed")],
+        [transport.Closed(4004, "Authentication failed", None)],
       ])
     },
     request: fn(_) { panic as "this bot never calls REST" },
@@ -825,7 +827,7 @@ fn script() -> List(List(transport.Event)) {
     ],
     [transport.TextMessage(frames.dispatch("MESSAGE_CREATE", 2, ping("1")))],
     [transport.TextMessage(frames.dispatch("MESSAGE_CREATE", 3, ping("5")))],
-    [transport.Closed(4004, "Authentication failed")],
+    [transport.Closed(4004, "Authentication failed", None)],
   ]
 }
 
@@ -835,6 +837,7 @@ fn ping(id: String) -> json.Json {
     #("channel_id", json.string("1000000000000000002")),
     #("author", json.object([#("id", json.string("1000000000000000003"))])),
     #("content", json.string("!ping")),
+    #("type", json.int(0)),
   ])
 }
 
@@ -868,7 +871,9 @@ fn socket(
     drop: fn() { Nil },
     turn: fn(_) {
       case remaining {
-        [] -> #(socket(log, []), [transport.Closed(4004, "script ran out")])
+        [] -> #(socket(log, []), [
+          transport.Closed(4004, "script ran out", None),
+        ])
         [next, ..rest] -> #(socket(log, rest), next)
       }
     },
@@ -891,7 +896,7 @@ fn refusing(log: Booklet(List(Step))) -> transport.Transport {
         _ ->
           socket(log, [
             [transport.Opened],
-            [transport.Closed(4004, "Authentication failed")],
+            [transport.Closed(4004, "Authentication failed", None)],
           ])
       }
     },
@@ -920,7 +925,7 @@ fn deaf(
     drop: fn() { did(log, Dropped) },
     turn: fn(_) {
       case remaining {
-        [] -> #(deaf(log, []), [transport.Closed(1006, "")])
+        [] -> #(deaf(log, []), [transport.Closed(1006, "", None)])
         [next, ..rest] -> #(deaf(log, rest), next)
       }
     },

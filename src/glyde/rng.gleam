@@ -70,8 +70,9 @@ fn scramble(state: Int) -> Int {
 /// A generator that never advances, reading its value as billionths of
 /// whatever is asked for: `fixed(0)` pins the low end of every range,
 /// `fixed(500_000_000)` the middle, `fixed(999_999_999)` the high end.
+/// Clamped here so every `Fixed` value is already in `[0, fixed_span)`.
 pub fn fixed(value: Int) -> Rng {
-  Fixed(value)
+  Fixed(int.clamp(value, 0, fixed_span - 1))
 }
 
 /// A value in `[0, bound)`. A non-positive bound gives 0 rather than
@@ -85,7 +86,7 @@ pub fn between(rng: Rng, low low: Int, high high: Int) -> #(Rng, Int) {
   draw(rng, low, high)
 }
 
-/// A float in `[0, 1)`. Discord's heartbeat rule is `interval * jitter`.
+/// A float in `[0, 1)`.
 pub fn unit(rng: Rng) -> #(Rng, Float) {
   case rng {
     Fixed(value) -> #(rng, fraction(value))
@@ -97,9 +98,9 @@ pub fn unit(rng: Rng) -> #(Rng, Float) {
 }
 
 /// What `Fixed` means everywhere: its value as a fraction of `fixed_span`,
-/// in [0, 1).
+/// in [0, 1). The value is already clamped by `fixed`.
 fn fraction(value: Int) -> Float {
-  int.to_float(int.clamp(value, 0, fixed_span - 1)) /. int.to_float(fixed_span)
+  int.to_float(value) /. int.to_float(fixed_span)
 }
 
 fn draw(rng: Rng, low: Int, high: Int) -> #(Rng, Int) {
@@ -107,10 +108,7 @@ fn draw(rng: Rng, low: Int, high: Int) -> #(Rng, Int) {
   case rng {
     // Multiply before dividing: the product is exact at any size, and
     // dividing first would floor every fraction to 0.
-    Fixed(value) if span > 0 -> {
-      let scaled = span * int.clamp(value, 0, fixed_span - 1) / fixed_span
-      #(rng, low + scaled)
-    }
+    Fixed(value) if span > 0 -> #(rng, low + span * value / fixed_span)
     Fixed(_) -> #(rng, low)
 
     // Advances even on an empty range: position depends on draw count only.

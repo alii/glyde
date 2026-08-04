@@ -21,7 +21,15 @@ fn parse(text: String) -> Result(command.ApplicationCommand, json.DecodeError) {
 fn parse_option(
   text: String,
 ) -> Result(command.ApplicationCommandOption, json.DecodeError) {
-  json.parse(text, command.option_decoder())
+  json.parse(
+    text,
+    decode.then(command.option_decoder(), fn(found) {
+      case found {
+        Some(value) -> decode.success(value)
+        None -> decode.failure(command.string_option("", ""), "modelled")
+      }
+    }),
+  )
 }
 
 pub fn command_type_round_trips_test() {
@@ -31,13 +39,13 @@ pub fn command_type_round_trips_test() {
       #(2, command.UserCommand),
       #(3, command.MessageCommand),
       #(4, command.PrimaryEntryPoint),
-      #(99, command.UnknownCommandType(99)),
     ],
     fn(row) {
-      assert command.command_type_from_int(row.0) == row.1
+      assert command.command_type_from_int(row.0) == Some(row.1)
       assert command.command_type_to_int(row.1) == row.0
     },
   )
+  assert command.command_type_from_int(99) == None
 }
 
 pub fn option_type_round_trips_every_value_test() {
@@ -54,13 +62,13 @@ pub fn option_type_round_trips_every_value_test() {
       #(9, command.MentionableOption),
       #(10, command.NumberOption),
       #(11, command.AttachmentOption),
-      #(12, command.UnknownOptionType(12)),
     ],
     fn(row) {
-      assert command.option_type_from_int(row.0) == row.1
+      assert command.option_type_from_int(row.0) == Some(row.1)
       assert command.option_type_to_int(row.1) == row.0
     },
   )
+  assert command.option_type_from_int(12) == None
 }
 
 pub fn context_and_integration_types_round_trip_test() {
@@ -69,69 +77,18 @@ pub fn context_and_integration_types_round_trip_test() {
       #(0, command.GuildContext),
       #(1, command.BotDmContext),
       #(2, command.PrivateChannelContext),
-      #(7, command.UnknownContext(7)),
     ],
     fn(row) {
-      assert command.context_type_from_int(row.0) == row.1
+      assert command.context_type_from_int(row.0) == Some(row.1)
       assert command.context_type_to_int(row.1) == row.0
     },
   )
-  list.each(
-    [
-      #(0, command.GuildInstall),
-      #(1, command.UserInstall),
-      #(7, command.UnknownIntegrationType(7)),
-    ],
-    fn(row) {
-      assert command.integration_type_from_int(row.0) == row.1
-      assert command.integration_type_to_int(row.1) == row.0
-    },
-  )
-}
-
-/// JSON object keys are strings, so this one is `"0"` or `"1"`.
-pub fn integration_type_decodes_from_an_object_key_test() {
-  let assert Ok(owners) =
-    json.parse(
-      "{\"0\":\"10\",\"1\":\"70\"}",
-      json_dict(command.integration_type_key_decoder()),
-    )
-  assert dict.get(owners, command.GuildInstall) == Ok("10")
-  assert dict.get(owners, command.UserInstall) == Ok("70")
-}
-
-/// This sits inside the interaction decode, which is all or nothing.
-pub fn an_unparseable_integration_key_does_not_fail_test() {
-  let assert Ok(owners) =
-    json.parse(
-      "{\"guild\":\"10\"}",
-      json_dict(command.integration_type_key_decoder()),
-    )
-  assert dict.get(owners, command.UnknownIntegrationKey("guild")) == Ok("10")
-}
-
-/// The unparseable key is kept, so two of them stay two entries. One shared
-/// sentinel would leave whichever the dict wrote last.
-pub fn two_unparseable_integration_keys_stay_apart_test() {
-  let assert Ok(owners) =
-    json.parse(
-      "{\"guild\":\"10\",\"user\":\"70\"}",
-      json_dict(command.integration_type_key_decoder()),
-    )
-  assert dict.size(owners) == 2
-  assert dict.get(owners, command.UnknownIntegrationKey("guild")) == Ok("10")
-  assert dict.get(owners, command.UnknownIntegrationKey("user")) == Ok("70")
-}
-
-/// It has no number of its own, so the send path writes a placeholder Discord
-/// rejects rather than a real install type.
-pub fn an_unparseable_integration_key_has_no_number_test() {
-  assert command.integration_type_to_int(command.UnknownIntegrationKey("guild"))
-    == -1
-}
-
-fn json_dict(key: decode.Decoder(k)) -> decode.Decoder(dict.Dict(k, String)) {
-  decode.dict(key, decode.string)
+  assert command.context_type_from_int(7) == None
+  list.each([#(0, command.GuildInstall), #(1, command.UserInstall)], fn(row) {
+    assert command.integration_type_from_int(row.0) == Some(row.1)
+    assert command.integration_type_to_int(row.1) == row.0
+  })
+  assert command.integration_type_from_int(7) == None
 }
 
 /// An absent `type` means CHAT_INPUT, and Discord omits it often.
@@ -151,6 +108,15 @@ pub fn a_context_menu_command_has_an_empty_description_test() {
     )
   assert found.type_ == command.UserCommand
   assert found.description == ""
+}
+
+/// A `type` this build has no name for is a glyde bug, so it fails the decode
+/// rather than making every caller unwrap.
+pub fn an_unmodelled_command_type_fails_test() {
+  let assert Error(_) =
+    parse(
+      "{\"id\":\"1\",\"application_id\":\"2\",\"type\":99,\"name\":\"x\",\"description\":\"\",\"version\":\"3\"}",
+    )
 }
 
 /// `None` is no override; `"0"` is admins only.
@@ -224,8 +190,9 @@ pub fn options_nest_three_deep_test() {
   assert leaf.required == True
 }
 
-/// The same enum the channel model uses, unknown tail included.
-pub fn channel_types_on_an_option_decode_test() {
+/// The same enum the channel model uses; a value it has no name for is
+/// dropped from the list.
+pub fn channel_types_on_an_option_filter_unmodelled_test() {
   let assert Ok(found) =
     parse_option(
       "{\"type\":7,\"name\":\"where\",\"description\":\"d\",\"channel_types\":[0,2,99]}",
@@ -234,7 +201,6 @@ pub fn channel_types_on_an_option_decode_test() {
     == command.ChannelKind(channel_types: [
       channel.GuildText,
       channel.GuildVoice,
-      channel.UnknownChannelType(99),
     ])
 }
 
@@ -270,8 +236,6 @@ pub fn integer_option_bounds_stay_whole_test() {
       min: Some(1),
       max: Some(100),
     )
-  assert json.to_string(command.number_limit_to_json(command.IntLimit(1)))
-    == "1"
 }
 
 /// A NUMBER bound is a double even when Discord writes it without a decimal
@@ -300,65 +264,50 @@ pub fn number_option_bounds_stay_fractional_test() {
     )
 }
 
-/// A type this build has never seen may put anything in `min_value`, and the
-/// whole response goes with it if that fails to decode.
-pub fn an_unknown_option_type_takes_a_bound_of_either_shape_test() {
-  let assert Ok(fractional) =
-    parse_option(
-      "{\"type\":42,\"name\":\"mystery\",\"description\":\"d\",\"min_value\":0.5}",
+/// An option whose type this build has no name for is dropped from `options`
+/// on decode, and the known one beside it survives.
+pub fn an_unmodelled_option_type_is_filtered_test() {
+  let assert Ok(found) =
+    parse(
+      "{\"id\":\"1\",\"application_id\":\"2\",\"name\":\"n\",\"description\":\"d\",\"options\":[{\"type\":42,\"name\":\"mystery\",\"description\":\"d\"},{\"type\":3,\"name\":\"kept\",\"description\":\"d\"}]}",
     )
-  let assert command.UnknownKind(type_: 42, min_value:, ..) = fractional.kind
-  assert min_value == Some(command.FloatLimit(0.5))
-
-  let assert Ok(whole) =
-    parse_option(
-      "{\"type\":42,\"name\":\"mystery\",\"description\":\"d\",\"min_value\":2}",
+  let assert [kept] = found.options
+  assert kept.name == "kept"
+  assert kept.kind
+    == command.StringKind(
+      suggestions: command.NoSuggestions,
+      min_length: None,
+      max_length: None,
     )
-  let assert command.UnknownKind(type_: 42, min_value:, ..) = whole.kind
-  assert min_value == Some(command.IntLimit(2))
-
-  let assert Ok(numeric_choice) =
-    parse_option(
-      "{\"type\":42,\"name\":\"mystery\",\"description\":\"d\",\"choices\":[{\"name\":\"Half\",\"value\":0.5}]}",
-    )
-  let assert command.UnknownKind(type_: 42, choices:, ..) = numeric_choice.kind
-  assert list.map(choices, fn(choice) { choice.value })
-    == [command.FloatChoice(0.5)]
 }
 
-/// Same rule for a choice: the option's type decides, not the bytes.
+/// A choice value is the option's own type, so a STRING choice is a `String`
+/// and an INTEGER choice an `Int`, no wrapper to unwrap. The NUMBER case
+/// checks a whole `1` still comes out `1.0`.
 pub fn choice_values_follow_the_declared_option_type_test() {
   let assert Ok(strings) =
     parse_option(
       "{\"type\":3,\"name\":\"animal\",\"description\":\"d\",\"choices\":[{\"name\":\"Dog\",\"value\":\"dog\"}]}",
     )
-  assert list.map(choices_of(strings.kind), fn(choice) { choice.value })
-    == [command.StringChoice("dog")]
+  let assert command.StringKind(suggestions: command.Choices(choices), ..) =
+    strings.kind
+  assert list.map(choices, fn(choice) { choice.value }) == ["dog"]
 
   let assert Ok(ints) =
     parse_option(
       "{\"type\":4,\"name\":\"count\",\"description\":\"d\",\"choices\":[{\"name\":\"One\",\"value\":1}]}",
     )
-  assert list.map(choices_of(ints.kind), fn(choice) { choice.value })
-    == [command.IntChoice(1)]
+  let assert command.IntegerKind(suggestions: command.Choices(choices), ..) =
+    ints.kind
+  assert list.map(choices, fn(choice) { choice.value }) == [1]
 
   let assert Ok(floats) =
     parse_option(
       "{\"type\":10,\"name\":\"ratio\",\"description\":\"d\",\"choices\":[{\"name\":\"Half\",\"value\":0.5},{\"name\":\"One\",\"value\":1}]}",
     )
-  assert list.map(choices_of(floats.kind), fn(choice) { choice.value })
-    == [command.FloatChoice(0.5), command.FloatChoice(1.0)]
-}
-
-fn choices_of(
-  kind: command.OptionKind,
-) -> List(command.ApplicationCommandOptionChoice) {
-  case kind {
-    command.StringKind(suggestions: command.Choices(choices), ..)
-    | command.IntegerKind(suggestions: command.Choices(choices), ..)
-    | command.NumberKind(suggestions: command.Choices(choices), ..) -> choices
-    _ -> []
-  }
+  let assert command.NumberKind(suggestions: command.Choices(choices), ..) =
+    floats.kind
+  assert list.map(choices, fn(choice) { choice.value }) == [0.5, 1.0]
 }
 
 pub fn choice_value_encodes_in_its_own_type_test() {
@@ -469,9 +418,9 @@ pub fn choice_encoding_test() {
   let assert Ok(found) =
     json.parse(
       "{\"name\":\"Dog\",\"value\":\"dog\"}",
-      command.choice_decoder(command.StringOption),
+      command.choice_decoder(decode.string),
     )
-  assert json.to_string(command.choice_to_json(found))
+  assert json.to_string(command.choice_to_json(found, json.string))
     == "{\"name\":\"Dog\",\"value\":\"dog\"}"
 }
 
@@ -489,45 +438,14 @@ pub fn decodes_a_full_command_test() {
   assert command.option_kind_type(group.kind) == command.SubCommandGroup
 }
 
-/// An unknown option type keeps its number and sends it back unchanged.
-pub fn an_unknown_option_type_still_decodes_test() {
-  let assert Ok(found) =
-    parse_option("{\"type\":42,\"name\":\"mystery\",\"description\":\"d\"}")
-  let assert command.UnknownKind(type_: 42, ..) = found.kind
-  assert command.option_kind_type(found.kind) == command.UnknownOptionType(42)
-  assert json.to_string(command.option_to_json(found))
-    == "{\"type\":42,\"name\":\"mystery\",\"description\":\"d\",\"required\":false}"
-}
-
-/// A bulk overwrite is a full replace, so a key dropped on the way in is a key
-/// deleted from the registered command on the way out.
-pub fn an_unknown_option_type_round_trips_every_key_test() {
-  let text =
-    "{\"type\":42,\"name\":\"mystery\",\"description\":\"d\",\"required\":false,\"choices\":[{\"name\":\"Half\",\"value\":0.5}],\"channel_types\":[0],\"min_value\":1,\"max_length\":6,\"autocomplete\":true}"
-  let assert Ok(found) = parse_option(text)
-  assert json.to_string(command.option_to_json(found)) == text
-}
-
-/// Every key includes the ones this build has no field for: the whole payload
-/// is kept, and the unread keys follow the read ones, sorted.
-pub fn an_unknown_option_type_round_trips_a_key_it_cannot_read_test() {
-  let assert Ok(found) =
-    parse_option(
-      "{\"type\":42,\"name\":\"mystery\",\"description\":\"d\",\"max_stars\":7,\"colour\":{\"hex\":\"#fff\"}}",
+/// An option whose type this build has no name for is `None`, so it never
+/// reaches `options`.
+pub fn an_unmodelled_option_type_decodes_as_none_test() {
+  assert json.parse(
+      "{\"type\":42,\"name\":\"mystery\",\"description\":\"d\"}",
+      command.option_decoder(),
     )
-  assert json.to_string(command.option_to_json(found))
-    == "{\"type\":42,\"name\":\"mystery\",\"description\":\"d\",\"required\":false,"
-    <> "\"colour\":{\"hex\":\"#fff\"},\"max_stars\":7}"
-}
-
-/// The modelled keys are written first and win, so editing one is not undone
-/// by the payload it was decoded from.
-pub fn an_edit_to_an_unknown_option_survives_its_payload_test() {
-  let assert Ok(found) =
-    parse_option("{\"type\":42,\"name\":\"mystery\",\"description\":\"d\"}")
-  let renamed = command.ApplicationCommandOption(..found, name: "puzzle")
-  assert json.to_string(command.option_to_json(renamed))
-    == "{\"type\":42,\"name\":\"puzzle\",\"description\":\"d\",\"required\":false}"
+    == Ok(None)
 }
 
 pub fn a_command_without_its_required_ids_fails_test() {

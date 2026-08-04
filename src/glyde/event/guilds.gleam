@@ -20,7 +20,7 @@ pub type MembersChunk {
     chunk_index: Int,
     chunk_count: Int,
     /// Echoes the request back, so this is whatever the caller sent, a real
-    /// snowflake or not. A String, never an `Id`.
+    /// snowflake or not.
     not_found: List(id.UserId),
     /// Absent when the request's nonce was over 32 bytes, which Discord drops
     /// silently.

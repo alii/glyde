@@ -5,17 +5,31 @@ import gleam/list
 import gleam/option.{None, Some}
 import glyde/channel
 import glyde/component.{
-  ActionButton, ActionRow, Button, ChannelSelect, DangerButton, DefaultChannel,
-  DefaultRole, DefaultUser, Icon, LinkButton, MentionableSelect, PremiumButton,
-  PrimaryButton, RoleSelect, SecondaryButton, SelectMenu, StringSelect,
-  SuccessButton, Text, TextAndIcon, UnknownButtonStyle, UnknownChild,
-  UnknownComponent, UserSelect,
+  ActionButton, ActionRow, Button, ChannelSelect, DangerButton, Icon, LinkButton,
+  MentionUser, MentionableSelect, PremiumButton, PrimaryButton, RoleSelect,
+  SecondaryButton, SelectMenu, StringSelect, SuccessButton, Text, TextAndIcon,
+  UserSelect,
 }
 import glyde/emoji
 import glyde/id
 
+fn modelled(
+  inner: decode.Decoder(option.Option(a)),
+  zero: a,
+) -> decode.Decoder(a) {
+  decode.then(inner, fn(found) {
+    case found {
+      Some(value) -> decode.success(value)
+      None -> decode.failure(zero, "modelled")
+    }
+  })
+}
+
 fn parse(text: String) -> Result(component.Component, json.DecodeError) {
-  json.parse(text, component.decoder())
+  json.parse(
+    text,
+    modelled(component.decoder(), ActionRow(id: None, components: [])),
+  )
 }
 
 fn encode(value: component.Component) -> String {
@@ -25,7 +39,10 @@ fn encode(value: component.Component) -> String {
 /// A button and a select menu are what a row holds, never a top-level entry,
 /// so they parse through their own decoder.
 fn parse_child(text: String) -> Result(component.RowChild, json.DecodeError) {
-  json.parse(text, component.row_child_decoder())
+  json.parse(
+    text,
+    modelled(component.row_child_decoder(), component.button("", "")),
+  )
 }
 
 fn encode_child(value: component.RowChild) -> String {
@@ -76,30 +93,21 @@ pub fn premium_button_decodes_test() {
 }
 
 /// Style 5 with no url is a contradiction, and the message is usually someone
-/// else's, so it degrades rather than fails. It cannot degrade to an action
-/// button: a link style with a `custom_id`, or an action button without one,
-/// is a 400 on the way back out. Keeping the payload is re-sendable.
-pub fn malformed_button_degrades_rather_than_failing_test() {
-  let assert Ok(no_url) =
-    parse_child("{\"type\":2,\"style\":5,\"custom_id\":\"x\"}")
-  let assert UnknownChild(type_: 2, ..) = no_url
-  assert encode_child(no_url) == "{\"custom_id\":\"x\",\"style\":5,\"type\":2}"
+/// else's, so it is dropped rather than failed. It cannot degrade to an
+/// action button: a link style with a `custom_id`, or an action button
+/// without one, is a 400 on the way back out.
+pub fn malformed_button_is_dropped_from_its_row_test() {
+  let dropped = fn(text) {
+    json.parse(text, component.row_child_decoder()) == Ok(None)
+  }
 
-  let assert Ok(no_sku) = parse_child("{\"type\":2,\"style\":6}")
-  let assert UnknownChild(type_: 2, ..) = no_sku
-  assert encode_child(no_sku) == "{\"style\":6,\"type\":2}"
-
-  let assert Ok(no_custom_id) =
-    parse_child("{\"type\":2,\"style\":1,\"label\":\"A\"}")
-  let assert UnknownChild(type_: 2, ..) = no_custom_id
-
-  // Neither a label nor an emoji is the same class of malformed, and an empty
-  // label would go back out as a `"label":""` the payload never carried.
-  let assert Ok(says_nothing) =
-    parse_child("{\"type\":2,\"style\":1,\"custom_id\":\"x\"}")
-  let assert UnknownChild(type_: 2, ..) = says_nothing
-  assert encode_child(says_nothing)
-    == "{\"custom_id\":\"x\",\"style\":1,\"type\":2}"
+  assert dropped("{\"type\":2,\"style\":5,\"custom_id\":\"x\"}")
+  assert dropped("{\"type\":2,\"style\":6}")
+  assert dropped("{\"type\":2,\"style\":1,\"label\":\"A\"}")
+  // Neither a label nor an emoji is the same class of malformed.
+  assert dropped("{\"type\":2,\"style\":1,\"custom_id\":\"x\"}")
+  // An action button whose style this build cannot name.
+  assert dropped("{\"type\":2,\"style\":9,\"custom_id\":\"x\",\"label\":\"A\"}")
 }
 
 /// Discord always sends `style`; a hand-built payload may not.
@@ -131,14 +139,14 @@ pub fn button_style_round_trips_test() {
     #(2, SecondaryButton),
     #(3, SuccessButton),
     #(4, DangerButton),
-    #(0, UnknownButtonStyle(0)),
-    #(99, UnknownButtonStyle(99)),
   ]
   list.each(styles, fn(row) {
     let #(wire, style) = row
-    assert component.button_style_from_int(wire) == style
+    assert component.button_style_from_int(wire) == Some(style)
     assert component.button_style_to_int(style) == wire
   })
+  assert component.button_style_from_int(0) == None
+  assert component.button_style_from_int(99) == None
 }
 
 pub fn action_row_nests_test() {
@@ -158,25 +166,24 @@ pub fn action_row_nests_test() {
 }
 
 /// A row inside a row is a 400, and no longer a value that can be built: the
-/// inner one decodes as an unmodelled child with its payload intact.
-pub fn a_nested_row_decodes_as_an_unmodelled_child_test() {
-  let assert Ok(ActionRow(components: [child], ..)) =
+/// inner one is dropped from the outer row's children.
+pub fn a_nested_row_is_dropped_test() {
+  let assert Ok(ActionRow(components:, ..)) =
     parse(
       "{\"type\":1,\"components\":[{\"type\":1,\"id\":2,\"components\":[]}]}",
     )
-  let assert UnknownChild(type_: 1, ..) = child
-  assert encode_child(child) == "{\"components\":[],\"id\":2,\"type\":1}"
+  assert components == []
 }
 
-/// A modal's text input is type 4, a child and not a top-level entry, and one
-/// this build does not model. The row keeps it as it arrived.
-pub fn a_row_keeps_an_unmodelled_child_test() {
+/// A modal's text input is type 4, a child this build does not model. The row
+/// drops it and keeps the button beside it.
+pub fn a_row_filters_unmodelled_children_test() {
   let text =
     "{\"type\":1,\"components\":[{\"custom_id\":\"name\",\"label\":\"Name\","
-    <> "\"style\":1,\"type\":4}]}"
-  let assert Ok(value) = parse(text)
-  let assert ActionRow(components: [UnknownChild(type_: 4, ..)], ..) = value
-  assert encode(value) == text
+    <> "\"style\":1,\"type\":4},"
+    <> "{\"type\":2,\"style\":1,\"custom_id\":\"go\",\"label\":\"Go\"}]}"
+  let assert Ok(ActionRow(components: [kept], ..)) = parse(text)
+  let assert Button(kind: ActionButton(custom_id: "go", ..), ..) = kept
 }
 
 pub fn string_select_decodes_test() {
@@ -216,9 +223,9 @@ pub fn string_select_decodes_test() {
 
 pub fn entity_selects_decode_test() {
   let cases = [
-    #(5, UserSelect(default_values: [DefaultUser(id.from_string("1"))])),
-    #(6, RoleSelect(default_values: [DefaultRole(id.from_string("1"))])),
-    #(7, MentionableSelect(default_values: [DefaultUser(id.from_string("1"))])),
+    #(5, UserSelect(default_users: [id.from_string("1")])),
+    #(6, RoleSelect(default_roles: [id.from_string("1")])),
+    #(7, MentionableSelect(default_values: [MentionUser(id.from_string("1"))])),
   ]
   list.each(cases, fn(row) {
     let #(wire, expected) = row
@@ -246,19 +253,17 @@ pub fn channel_select_carries_its_channel_types_test() {
   assert kind
     == ChannelSelect(
       channel_types: [channel.GuildText, channel.GuildVoice],
-      default_values: [DefaultChannel(id.from_string("9"))],
+      default_channels: [id.from_string("9")],
     )
 }
 
-/// The select is usually another bot's, so an unknown channel type decodes.
-pub fn unknown_channel_type_in_a_select_survives_test() {
+/// The select is usually another bot's; a channel type this build has no name
+/// for is dropped from the list, and the known one beside it survives.
+pub fn unmodelled_channel_type_in_a_select_is_filtered_test() {
   let assert Ok(SelectMenu(kind:, ..)) =
-    parse_child("{\"type\":8,\"custom_id\":\"c\",\"channel_types\":[99]}")
+    parse_child("{\"type\":8,\"custom_id\":\"c\",\"channel_types\":[99,0]}")
   assert kind
-    == ChannelSelect(
-      channel_types: [channel.UnknownChannelType(99)],
-      default_values: [],
-    )
+    == ChannelSelect(channel_types: [channel.GuildText], default_channels: [])
 }
 
 /// A dropped default would pre-select the wrong things, so this fails instead.
@@ -269,58 +274,18 @@ pub fn unknown_default_value_type_is_an_error_test() {
     )
 }
 
-/// Another bot's Components V2 message arrives in your MESSAGE_CREATE.
-pub fn unmodelled_component_types_decode_test() {
+/// Another bot's Components V2 message arrives in your MESSAGE_CREATE. A type
+/// this build has no name for decodes as `None`, so the containing list holds
+/// only the rows it can name.
+pub fn unmodelled_component_types_are_dropped_test() {
   let types = [4, 9, 10, 12, 17, 23]
   list.each(types, fn(wire) {
-    let assert Ok(value) =
-      parse("{\"type\":" <> int.to_string(wire) <> ",\"content\":\"hi\"}")
-    let assert UnknownComponent(type_:, ..) = value
-    assert type_ == wire
-    assert component.component_type_to_int(component.component_type(value))
-      == wire
+    assert json.parse(
+        "{\"type\":" <> int.to_string(wire) <> ",\"content\":\"hi\"}",
+        component.decoder(),
+      )
+      == Ok(None)
   })
-}
-
-/// An unmodelled component keeps its payload, so a bot can echo back a message
-/// it did not understand. Key order is normalised: a `Dict` has none.
-pub fn unmodelled_component_round_trips_its_payload_test() {
-  let assert Ok(value) =
-    parse(
-      "{\"type\":17,\"accent_color\":16711680,\"spoiler\":false,\"components\":[]}",
-    )
-  assert encode(value)
-    == "{\"accent_color\":16711680,\"components\":[],\"spoiler\":false,\"type\":17}"
-}
-
-pub fn unmodelled_component_keeps_nested_values_test() {
-  let assert Ok(value) =
-    parse(
-      "{\"type\":10,\"content\":\"x\",\"nested\":{\"b\":[1,\"two\",null],\"a\":true}}",
-    )
-  assert encode(value)
-    == "{\"content\":\"x\",\"nested\":{\"a\":true,\"b\":[1,\"two\",null]},\"type\":10}"
-}
-
-/// The `type` written out comes from the component, not from the payload it
-/// was decoded from, so it cannot disagree with `component_type`.
-pub fn an_unmodelled_component_writes_the_type_it_reports_test() {
-  let assert Ok(payload) = json.parse("{\"content\":\"hi\"}", decode.dynamic)
-  let assert Ok(raw) = component.raw_payload(payload)
-  assert encode(UnknownComponent(type_: 17, raw:))
-    == "{\"content\":\"hi\",\"type\":17}"
-}
-
-/// The payload is read once, when it is decoded. An `UnknownComponent` holding
-/// something the encoder would silently drop is not a value: the only payload
-/// that writes no keys is the empty one, asked for by name.
-pub fn a_payload_that_is_not_an_object_is_refused_test() {
-  let assert Ok(not_an_object) = json.parse("[1,2]", decode.dynamic)
-  assert component.raw_payload(not_an_object)
-    == Error([decode.DecodeError("Dict", "List", [])])
-
-  assert encode(UnknownComponent(type_: 17, raw: component.empty_raw_payload()))
-    == "{\"type\":17}"
 }
 
 /// One table for the wire numbering, shared with `model/interaction`, which
@@ -335,20 +300,18 @@ pub fn the_component_type_table_round_trips_test() {
     #(6, component.RoleSelectType),
     #(7, component.MentionableSelectType),
     #(8, component.ChannelSelectType),
-    #(17, component.UnknownComponentType(17)),
   ]
   list.each(table, fn(row) {
     let #(wire, kind) = row
-    assert component.component_type_from_int(wire) == kind
+    assert component.component_type_from_int(wire) == Some(kind)
     assert component.component_type_to_int(kind) == wire
   })
+  assert component.component_type_from_int(17) == None
 }
 
 pub fn component_type_matches_the_wire_test() {
-  let assert Ok(section) = parse("{\"type\":17,\"components\":[]}")
   assert component.component_type(ActionRow(id: None, components: []))
     == component.ActionRowType
-  assert component.component_type(section) == component.UnknownComponentType(17)
 
   let children = [
     #(component.button("a", "A"), component.ButtonType),
@@ -357,11 +320,11 @@ pub fn component_type_matches_the_wire_test() {
       component.StringSelectType,
     ),
     #(
-      component.select("c", UserSelect(default_values: [])),
+      component.select("c", UserSelect(default_users: [])),
       component.UserSelectType,
     ),
     #(
-      component.select("c", RoleSelect(default_values: [])),
+      component.select("c", RoleSelect(default_roles: [])),
       component.RoleSelectType,
     ),
     #(
@@ -371,7 +334,7 @@ pub fn component_type_matches_the_wire_test() {
     #(
       component.select(
         "c",
-        ChannelSelect(channel_types: [], default_values: []),
+        ChannelSelect(channel_types: [], default_channels: []),
       ),
       component.ChannelSelectType,
     ),
@@ -392,7 +355,7 @@ fn buttons(count: Int) -> List(component.RowChild) {
 
 fn row_widths(rows: List(component.Component)) -> List(Int) {
   list.map(rows, fn(row) {
-    let assert ActionRow(components:, ..) = row
+    let ActionRow(components:, ..) = row
     list.length(components)
   })
 }
@@ -459,38 +422,11 @@ pub fn rows_returns_rows_a_caller_can_append_to_test() {
     ]
 }
 
-/// Types 9 to 23 are top-level Components V2 elements, and a row around one is
-/// a 400. They decode as top-level entries, so `rows` never sees one.
-pub fn a_components_v2_element_is_a_top_level_entry_test() {
-  let assert Ok(section) = parse("{\"type\":17,\"components\":[]}")
-  let assert UnknownComponent(type_: 17, ..) = section
-  assert encode(section) == "{\"components\":[],\"type\":17}"
-}
-
-/// Being unmodelled is not the same as being top level. A type 2 that failed
-/// to decode is still a button, and a button outside a row is a 400.
-pub fn rows_packs_an_unmodelled_button_test() {
-  let assert Ok(degraded) =
-    parse_child("{\"type\":2,\"style\":5,\"custom_id\":\"x\"}")
-  let assert UnknownChild(type_: 2, ..) = degraded
-
-  assert component.rows([degraded])
-    == [ActionRow(id: None, components: [degraded])]
-
-  let loose = list.flatten([buttons(1), [degraded], buttons(1)])
-  assert component.rows(loose) == [ActionRow(id: None, components: loose)]
-}
-
-/// A text input is type 4, one per action row, the way a select menu is.
-pub fn rows_gives_a_text_input_its_own_row_test() {
-  let assert Ok(input) =
-    parse_child(
-      "{\"type\":4,\"custom_id\":\"name\",\"style\":1,\"label\":\"Name\"}",
-    )
-  let assert UnknownChild(type_: 4, ..) = input
-
-  let mixed = list.flatten([buttons(2), [input], buttons(1)])
-  assert row_widths(component.rows(mixed)) == [2, 1, 1]
+/// Types 9 to 23 are top-level Components V2 elements. They are dropped from
+/// the containing list on decode.
+pub fn a_components_v2_element_is_dropped_test() {
+  assert json.parse("{\"type\":17,\"components\":[]}", component.decoder())
+    == Ok(None)
 }
 
 /// A create body that spells out its defaults clears things on the next edit.
@@ -533,8 +469,8 @@ pub fn channel_select_encodes_its_types_test() {
   let value =
     component.select(
       "pick",
-      ChannelSelect(channel_types: [channel.GuildText], default_values: [
-        DefaultChannel(id.from_string("9")),
+      ChannelSelect(channel_types: [channel.GuildText], default_channels: [
+        id.from_string("9"),
       ]),
     )
   assert encode_child(value)
@@ -567,13 +503,12 @@ pub fn decode_encode_round_trip_test() {
 /// The exported style codecs are the copies nothing else exercises, and
 /// Discord writes the style as `2` and as `2.0`.
 pub fn the_standalone_button_style_codecs_are_wired_together_test() {
-  let assert Ok(style) = json.parse("4", component.button_style_decoder())
+  let assert Ok(Some(style)) = json.parse("4", component.button_style_decoder())
   assert style == DangerButton
   assert json.to_string(component.button_style_to_json(style)) == "4"
 
-  assert json.parse("4.0", component.button_style_decoder()) == Ok(DangerButton)
+  assert json.parse("4.0", component.button_style_decoder())
+    == Ok(Some(DangerButton))
 
-  let assert Ok(unknown) = json.parse("9", component.button_style_decoder())
-  assert unknown == UnknownButtonStyle(9)
-  assert json.to_string(component.button_style_to_json(unknown)) == "9"
+  assert json.parse("9", component.button_style_decoder()) == Ok(None)
 }

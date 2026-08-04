@@ -12,7 +12,7 @@ import gleam/option.{type Option}
 import gleam/result
 import glyde/id.{type Id}
 import glyde/internal/decode_error
-import glyde/internal/url
+import glyde/internal/host
 import glyde/wire
 
 pub type ReadyPayload {
@@ -21,7 +21,7 @@ pub type ReadyPayload {
     /// `resume_gateway_url` reduced to the bare host a RESUME dials. `None`
     /// when there was no host in it, which costs nothing: the configured host
     /// answers a RESUME too, and the session is worth more than the hint.
-    resume_host: Option(url.Host),
+    resume_host: Option(host.Host),
     user: Id(id.User),
     /// How many guilds READY listed, not the guilds themselves:
     /// `glyde/ready` is the one that decodes them.
@@ -31,16 +31,14 @@ pub type ReadyPayload {
 
 /// Why a READY could not be turned into a session.
 pub type ReadyRejected {
-  /// One of `session_id`, `resume_gateway_url` and `user.id` is missing or the
-  /// wrong type.
+  /// One of `session_id` and `user.id` is missing or the wrong type.
   MissingReadyFields(errors: List(decode.DecodeError))
 }
 
 pub fn describe_rejected(why: ReadyRejected) -> String {
   case why {
     MissingReadyFields(errors:) ->
-      "ready needs session_id, resume_gateway_url and user.id: "
-      <> decode_error.describe(errors)
+      "ready needs session_id and user.id: " <> decode_error.describe(errors)
   }
 }
 
@@ -52,7 +50,7 @@ pub fn read(data: Dynamic) -> Result(ReadyPayload, ReadyRejected) {
 
 fn decoder() -> Decoder(ReadyPayload) {
   use session_id <- decode.field("session_id", decode.string)
-  use resume_url <- decode.field("resume_gateway_url", decode.string)
+  use resume_url <- wire.soft_field("resume_gateway_url", decode.string)
   use user <- decode.subfield(["user", "id"], id.decoder())
   // A guild count is worth less than a session, so unreadable reads as zero.
   use guild_count <- decode.optional_field(
@@ -62,7 +60,9 @@ fn decoder() -> Decoder(ReadyPayload) {
   )
   decode.success(ReadyPayload(
     session_id:,
-    resume_host: option.from_result(url.host_of(resume_url)),
+    resume_host: option.then(resume_url, fn(u) {
+      option.from_result(host.host_of(u))
+    }),
     user:,
     guild_count:,
   ))

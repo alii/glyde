@@ -8,28 +8,31 @@
 import gleam/list
 import gleam/option.{type Option}
 import glyde/gateway.{
-  type Conn, type Event, type Input, type Notice, type Output, type Session,
-  type Shard, type Stamp, type Timer,
+  type Conn, type Event, type Host, type Input, type Notice, type Output,
+  type Session, type Shard, type Stamp, type Timer,
 }
 import glyde/gateway/command.{type Command}
 import glyde/gateway/frame.{type Outbound}
 import glyde/intents.{type Intents}
+import glyde/token
+import glyde/websocket/sendcode
 
 /// The six things a shard asks of the outside world. Every function takes the
 /// bot's state first and returns it, so a fake one can record every frame.
 pub type Transport(state) {
   Transport(
-    /// Open a WebSocket to `wss://<host><path>`. Keep the `Conn` and hand it
-    /// back on every input from this socket, and do not touch the path.
-    open: fn(state, Conn, String, String) -> state,
-    /// Write `frame.text` as one text frame. A failed write is
+    /// Open a WebSocket to `wss://<host><path>`, spelling the host with
+    /// `gateway.host_to_string`. Keep the `Conn` and hand it back on every
+    /// input from this socket, and do not touch the path.
+    open: fn(state, Conn, Host, String) -> state,
+    /// Write `frame.outbound_text(frame)` as one text frame. A failed write is
     /// `closed(bot, conn, None)`, never a raise: raising abandons the batch,
-    /// heartbeat timer and all. `frame.op` says what it was, for logging, so
-    /// no adapter has to parse the payload back.
+    /// heartbeat timer and all. `frame.outbound_op(frame)` says what it was,
+    /// for logging, so no adapter has to parse the payload back.
     send: fn(state, Outbound) -> state,
     /// Write a close frame with this code, then tear the socket down. Only
     /// ever 1000, which ends the session, or 4000, which keeps it resumable.
-    close: fn(state, Int) -> state,
+    close: fn(state, sendcode.SendCode) -> state,
     /// Abandon the socket with no close frame. The peer has already gone, or
     /// there was never a socket.
     drop: fn(state) -> state,
@@ -129,11 +132,15 @@ const default_seed: Int = 1
 
 /// Default gateway config, no state.
 pub fn new(
-  token token: String,
+  token secret: String,
   intents intents: Intents,
   transport transport: Transport(Nil),
 ) -> Bot(Nil) {
-  stateful(config: gateway.config(token:, intents:), state: Nil, transport:)
+  stateful(
+    config: gateway.config(token: token.new(secret), intents:),
+    state: Nil,
+    transport:,
+  )
 }
 
 /// A bot carrying a state of your own, and the way to the rest of the config:
@@ -210,7 +217,7 @@ pub fn with_inflater(bot: Bot(state), inflater: Inflater(state)) -> Bot(state) {
 }
 
 fn compressing(shard: Shard, compression: gateway.Compression) -> Shard {
-  gateway.Shard(..shard, config: gateway.Config(..shard.config, compression:))
+  gateway.with_compression(shard, compression)
 }
 
 /// Reseed the shard's jitter. Below 2^31, and different for every shard of a
@@ -353,13 +360,8 @@ fn advance(bot: Bot(state), input: Input) -> Bot(state) {
 
 fn perform(bot: Bot(state), output: Output) -> Bot(state) {
   case output {
-    // The core carries a host as a type and a transport builds a URL out of
-    // one, so this is where the two meet.
     gateway.Open(conn, host, path) ->
-      set(
-        bot,
-        bot.transport.open(bot.state, conn, gateway.host_to_string(host), path),
-      )
+      set(bot, bot.transport.open(bot.state, conn, host, path))
 
     gateway.Send(payload) -> set(bot, bot.transport.send(bot.state, payload))
 

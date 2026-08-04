@@ -61,7 +61,7 @@ fn full_headers() -> List(#(String, String)) {
 
 pub fn learns_from_a_normal_response_test() {
   assert headers.outcome(200, full_headers(), "")
-    == headers.Learned(limiter.Counters(
+    == limiter.Learned(limiter.Counters(
       bucket: Some("abcd1234"),
       limit: Some(5),
       remaining: Some(4),
@@ -101,7 +101,7 @@ pub fn absolute_reset_is_never_read_test() {
       ],
       "",
     )
-    == headers.Learned(limiter.Counters(
+    == limiter.Learned(limiter.Counters(
       bucket: Some("abcd1234"),
       limit: None,
       remaining: None,
@@ -113,7 +113,7 @@ pub fn absolute_reset_is_never_read_test() {
 /// gets written over a bucket Discord had already closed.
 pub fn missing_counters_stay_absent_test() {
   assert headers.outcome(200, [#("x-ratelimit-bucket", "h")], "")
-    == headers.Learned(limiter.Counters(
+    == limiter.Learned(limiter.Counters(
       bucket: Some("h"),
       limit: None,
       remaining: None,
@@ -133,7 +133,7 @@ pub fn malformed_counters_fall_back_test() {
       ],
       "",
     )
-    == headers.Learned(limiter.Counters(
+    == limiter.Learned(limiter.Counters(
       bucket: Some("h"),
       limit: None,
       remaining: None,
@@ -152,7 +152,7 @@ pub fn oversized_counters_are_absent_test() {
       ],
       "",
     )
-    == headers.Learned(limiter.Counters(
+    == limiter.Learned(limiter.Counters(
       bucket: Some("h"),
       limit: None,
       remaining: None,
@@ -168,7 +168,7 @@ pub fn negative_remaining_clamps_test() {
       "",
     )
   assert outcome
-    == headers.Learned(limiter.Counters(
+    == limiter.Learned(limiter.Counters(
       bucket: Some("h"),
       limit: None,
       remaining: Some(0),
@@ -179,7 +179,7 @@ pub fn negative_remaining_clamps_test() {
 /// The hash is compared, never inspected, and an empty one is still a hash.
 pub fn bucket_hash_round_trips_test() {
   assert headers.outcome(200, [#("x-ratelimit-bucket", "")], "")
-    == headers.Learned(limiter.Counters(
+    == limiter.Learned(limiter.Counters(
       bucket: Some(""),
       limit: None,
       remaining: None,
@@ -189,10 +189,10 @@ pub fn bucket_hash_round_trips_test() {
 
 /// Permissive defaults would throw away a known bucket's deadline.
 pub fn no_rate_limit_headers_teaches_nothing_test() {
-  assert headers.outcome(200, [], "") == headers.Opaque
+  assert headers.outcome(200, [], "") == limiter.Opaque
   assert headers.outcome(200, [#("content-type", "application/json")], "")
-    == headers.Opaque
-  assert headers.outcome(500, [], "") == headers.Opaque
+    == limiter.Opaque
+  assert headers.outcome(500, [], "") == limiter.Opaque
 }
 
 /// The bucket hash names which bucket the counters belong to; it is not
@@ -203,7 +203,7 @@ pub fn counters_are_learned_without_a_bucket_hash_test() {
       [#("x-ratelimit-remaining", "0"), #("x-ratelimit-reset-after", "30")],
       "",
     )
-    == headers.Learned(limiter.Counters(
+    == limiter.Learned(limiter.Counters(
       bucket: None,
       limit: None,
       remaining: Some(0),
@@ -221,7 +221,7 @@ pub fn counters_are_read_independently_test() {
       ],
       "",
     )
-    == headers.Learned(limiter.Counters(
+    == limiter.Learned(limiter.Counters(
       bucket: None,
       limit: Some(5),
       remaining: None,
@@ -232,7 +232,7 @@ pub fn counters_are_read_independently_test() {
 /// A 5xx is not a rate limit and still carries counters worth keeping.
 pub fn any_status_with_counters_teaches_test() {
   let expected =
-    headers.Learned(limiter.Counters(
+    limiter.Learned(limiter.Counters(
       bucket: Some("h"),
       limit: None,
       remaining: None,
@@ -245,13 +245,13 @@ pub fn any_status_with_counters_teaches_test() {
 
 pub fn rejections_are_their_own_outcome_test() {
   assert headers.outcome(401, full_headers(), "")
-    == headers.Rejected(headers.Unauthorized)
+    == limiter.Rejected(limiter.Unauthorized)
   assert headers.outcome(403, full_headers(), "")
-    == headers.Rejected(headers.Forbidden)
+    == limiter.Rejected(limiter.Forbidden)
 }
 
 /// The three scopes have different effects, so each is read, not inferred.
-fn scope_table() -> List(#(List(#(String, String)), headers.Outcome)) {
+fn scope_table() -> List(#(List(#(String, String)), limiter.Outcome)) {
   [
     #(
       [
@@ -259,7 +259,7 @@ fn scope_table() -> List(#(List(#(String, String)), headers.Outcome)) {
         #("x-ratelimit-scope", "user"),
         #("x-ratelimit-bucket", "h"),
       ],
-      headers.Throttled(65_000, limiter.UserScope, Some("h")),
+      limiter.Throttled(65_000, limiter.UserScope, Some("h")),
     ),
     #(
       [
@@ -268,7 +268,7 @@ fn scope_table() -> List(#(List(#(String, String)), headers.Outcome)) {
         #("x-ratelimit-bucket", "h"),
         #("x-ratelimit-reset-after", "64.57"),
       ],
-      headers.Throttled(1_337_000, limiter.SharedScope, Some("h")),
+      limiter.Throttled(1_337_000, limiter.SharedScope, Some("h")),
     ),
     #(
       [
@@ -276,17 +276,17 @@ fn scope_table() -> List(#(List(#(String, String)), headers.Outcome)) {
         #("x-ratelimit-scope", "global"),
         #("x-ratelimit-global", "true"),
       ],
-      headers.Throttled(65_000, limiter.GlobalScope, None),
+      limiter.Throttled(65_000, limiter.GlobalScope, None),
     ),
     // No scope header, so the body's global flag as Discord mirrors it.
     #(
       [#("retry-after", "65"), #("x-ratelimit-global", "true")],
-      headers.Throttled(65_000, limiter.GlobalScope, None),
+      limiter.Throttled(65_000, limiter.GlobalScope, None),
     ),
     // No scope, but bucket headers present: our own route's limit.
     #(
       [#("retry-after", "1.5"), #("x-ratelimit-bucket", "h")],
-      headers.Throttled(1500, limiter.UserScope, Some("h")),
+      limiter.Throttled(1500, limiter.UserScope, Some("h")),
     ),
     // A scope value nobody has documented tells us as little as none at all.
     #(
@@ -295,16 +295,16 @@ fn scope_table() -> List(#(List(#(String, String)), headers.Outcome)) {
         #("x-ratelimit-scope", "moon"),
         #("x-ratelimit-bucket", "h"),
       ],
-      headers.Throttled(2000, limiter.UserScope, Some("h")),
+      limiter.Throttled(2000, limiter.UserScope, Some("h")),
     ),
     // Nothing from Discord at all: a block in front of it stops everything.
     #(
       [#("retry-after", "65")],
-      headers.Throttled(65_000, limiter.GlobalScope, None),
+      limiter.Throttled(65_000, limiter.GlobalScope, None),
     ),
     #(
       [],
-      headers.Throttled(headers.fallback_retry_ms, limiter.GlobalScope, None),
+      limiter.Throttled(headers.fallback_retry_ms, limiter.GlobalScope, None),
     ),
   ]
 }
@@ -323,21 +323,21 @@ pub fn the_body_flag_answers_for_an_unnamed_scope_test() {
     "{\"message\":\"rate limited\",\"retry_after\":1.5,\"global\":true}"
 
   assert headers.outcome(429, [#("x-ratelimit-scope", "moon")], body)
-    == headers.Throttled(1500, limiter.GlobalScope, None)
+    == limiter.Throttled(1500, limiter.GlobalScope, None)
 
   // A name we do know still wins: Discord said which rule it applied.
   assert headers.outcome(429, [#("x-ratelimit-scope", "user")], body)
-    == headers.Throttled(1500, limiter.UserScope, None)
+    == limiter.Throttled(1500, limiter.UserScope, None)
 }
 
 /// A body in Discord's rate-limit shape proves Discord answered, which rules
 /// out the block in front of it that a bare 429 otherwise reads as.
 pub fn a_discord_body_rules_out_a_block_test() {
   assert headers.outcome(429, [], "{\"retry_after\":1.5,\"global\":false}")
-    == headers.Throttled(1500, limiter.UserScope, None)
+    == limiter.Throttled(1500, limiter.UserScope, None)
 
   assert headers.outcome(429, [], "")
-    == headers.Throttled(headers.fallback_retry_ms, limiter.GlobalScope, None)
+    == limiter.Throttled(headers.fallback_retry_ms, limiter.GlobalScope, None)
 }
 
 /// The scope header is readable on its own, unresolved, so a value Discord has
@@ -368,7 +368,7 @@ pub fn reset_after_is_never_a_429_wait_test() {
         ],
         "",
       )
-    let assert headers.Throttled(retry_after_ms:, ..) = outcome
+    let assert limiter.Throttled(retry_after_ms:, ..) = outcome
     assert #(scope, retry_after_ms) == #(scope, headers.fallback_retry_ms)
   })
 }
@@ -385,7 +385,7 @@ pub fn fractional_retry_after_test() {
       ],
       "",
     )
-    == headers.Throttled(1500, limiter.UserScope, Some("h"))
+    == limiter.Throttled(1500, limiter.UserScope, Some("h"))
 }
 
 /// Where the header and the body disagree the longer one wins: under-waiting a
@@ -423,7 +423,7 @@ pub fn retry_after_is_the_longer_of_header_and_body_test() {
         #("x-ratelimit-bucket", "h"),
       ]
     }
-    let assert headers.Throttled(retry_after_ms:, ..) =
+    let assert limiter.Throttled(retry_after_ms:, ..) =
       headers.outcome(429, sent, body)
     assert #(header, body, retry_after_ms) == #(header, body, want)
   })
@@ -432,7 +432,7 @@ pub fn retry_after_is_the_longer_of_header_and_body_test() {
 /// A `retry_after` past what a millisecond count holds exactly counts as
 /// absent, and the header stands.
 pub fn an_unreadably_large_body_retry_after_falls_back_test() {
-  let assert headers.Throttled(retry_after_ms:, ..) =
+  let assert limiter.Throttled(retry_after_ms:, ..) =
     headers.outcome(
       429,
       [#("retry-after", "65"), #("x-ratelimit-bucket", "h")],
@@ -458,7 +458,7 @@ pub fn body_retry_after_is_exact_test() {
 
   list.each(table, fn(row) {
     let #(body, want) = row
-    let assert headers.Throttled(retry_after_ms:, ..) =
+    let assert limiter.Throttled(retry_after_ms:, ..) =
       headers.outcome(429, [#("x-ratelimit-bucket", "h")], body)
     assert #(body, retry_after_ms) == #(body, want)
   })

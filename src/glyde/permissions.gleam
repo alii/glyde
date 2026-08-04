@@ -129,6 +129,8 @@ pub fn all_permissions() -> List(Permission) {
   ]
 }
 
+// A new variant breaks this case; add it to all_permissions() as well.
+
 /// The bit number, not its value, from Discord's permissions table. Bit 47 is
 /// missing, retired by Discord.
 pub fn bit_index(permission: Permission) -> Int {
@@ -238,13 +240,29 @@ pub fn contains(permissions: Permissions, permission: Permission) -> Bool {
   int.bitwise_and(permissions.bits, mask(permission)) != 0
 }
 
-/// Whether an *effective* permission set permits this. Administrator grants
-/// everything, which is Discord's rule and not a property of the bitfield, so
-/// only ask this of a set you have already resolved. On a role's bits or on
-/// an overwrite's allow or deny it reads a plain Administrator bit as
-/// everything, which no side of an overwrite means.
-pub fn allows(permissions: Permissions, permission: Permission) -> Bool {
-  contains(permissions, Administrator) || contains(permissions, permission)
+/// A permission set Discord has already resolved: roles unioned, overwrites
+/// applied, owner and Administrator accounted for. `allows` takes one of
+/// these and nothing else, so a role's raw bits or one side of an overwrite
+/// cannot be asked the effective question by accident.
+pub opaque type Effective {
+  Effective(bits: Permissions)
+}
+
+/// Wrap a raw set as effective. For tests, and for a set you resolved
+/// yourself from roles and overwrites.
+pub fn effective(set: Permissions) -> Effective {
+  Effective(set)
+}
+
+/// The bits inside, for `contains`, `to_list` and the set operations.
+pub fn raw(set: Effective) -> Permissions {
+  set.bits
+}
+
+/// Whether an effective permission set permits this. Administrator grants
+/// everything, which is Discord's rule and not a property of the bitfield.
+pub fn allows(set: Effective, permission: Permission) -> Bool {
+  contains(set.bits, Administrator) || contains(set.bits, permission)
 }
 
 pub fn add(permissions: Permissions, permission: Permission) -> Permissions {
@@ -283,6 +301,12 @@ pub fn decoder() -> Decoder(Permissions) {
     Error(NotDecimal(_)) -> decode.failure(none(), "Permissions")
     Error(TooWide(_)) -> decode.failure(none(), "Permissions of 64 bits")
   }
+}
+
+/// A permission set Discord sends already resolved, tagged so `allows`
+/// accepts it and a raw role or overwrite field does not.
+pub fn effective_decoder() -> Decoder(Effective) {
+  decoder() |> decode.map(Effective)
 }
 
 pub fn to_json(permissions: Permissions) -> Json {

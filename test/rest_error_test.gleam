@@ -445,7 +445,7 @@ pub fn both_readers_resolve_a_429_the_same_way_test() {
   list.each(agreement_table(), fn(row) {
     let #(sent, body) = row
     let assert error.RateLimited(limit:, ..) = read(429, sent, body)
-    let assert headers.Throttled(scope:, ..) = headers.outcome(429, sent, body)
+    let assert limiter.Throttled(scope:, ..) = headers.outcome(429, sent, body)
 
     assert #(sent, limit.scope) == #(sent, scope)
   })

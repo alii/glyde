@@ -5,16 +5,12 @@
 //// registration, so they live here rather than in `interaction`.
 
 import gleam/dict.{type Dict}
-import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode.{type Decoder}
-import gleam/int
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/result
 import gleam/string
 import glyde/channel
-import glyde/component
 import glyde/field.{type Field, Absent, Present}
 import glyde/id
 import glyde/permissions.{type Permissions}
@@ -27,7 +23,8 @@ import glyde/wire
 pub type ApplicationCommand {
   ApplicationCommand(
     id: id.CommandId,
-    /// Optional on the wire, defaulting to CHAT_INPUT.
+    /// Optional on the wire, defaulting to CHAT_INPUT. A value this build has
+    /// no name for fails the decode.
     type_: ApplicationCommandType,
     application_id: id.ApplicationId,
     /// Absent for a global command.
@@ -57,34 +54,31 @@ pub type ApplicationCommand {
   )
 }
 
+/// A value this build has no name for fails the decode.
 pub type ApplicationCommandType {
   ChatInput
   UserCommand
   MessageCommand
   /// Activities only.
   PrimaryEntryPoint
-  UnknownCommandType(Int)
 }
 
-/// Where in Discord a command may be used, or was used from.
+/// Where in Discord a command may be used, or was used from. A value this
+/// build has no name for is dropped from `contexts` on decode.
 pub type InteractionContextType {
   GuildContext
   BotDmContext
   PrivateChannelContext
-  UnknownContext(Int)
 }
 
-/// How an app was installed. Also a JSON object key, as "0" or "1".
+/// How an app was installed. A value this build has no name for is dropped
+/// from `integration_types` on decode.
 pub type ApplicationIntegrationType {
   GuildInstall
   UserInstall
-  UnknownIntegrationType(Int)
-  /// An object key that was not a number at all. It keeps the raw key, because
-  /// this is a `Dict` key: one shared sentinel would drop every unparseable
-  /// entry but the last.
-  UnknownIntegrationKey(String)
 }
 
+/// A value this build has no name for is dropped from `options` on decode.
 pub type ApplicationCommandOptionType {
   SubCommand
   SubCommandGroup
@@ -97,7 +91,6 @@ pub type ApplicationCommandOptionType {
   MentionableOption
   NumberOption
   AttachmentOption
-  UnknownOptionType(Int)
 }
 
 /// One parameter of a command. Everything an option type does not have goes in
@@ -127,13 +120,17 @@ pub type OptionKind {
   SubCommandKind(options: List(ApplicationCommandOption))
   SubCommandGroupKind(options: List(ApplicationCommandOption))
   StringKind(
-    suggestions: Suggestions,
+    suggestions: Suggestions(String),
     min_length: Option(Int),
     max_length: Option(Int),
   )
-  IntegerKind(suggestions: Suggestions, min: Option(Int), max: Option(Int))
+  IntegerKind(suggestions: Suggestions(Int), min: Option(Int), max: Option(Int))
   /// A double, whole bounds included: Discord writes `5` and means `5.0`.
-  NumberKind(suggestions: Suggestions, min: Option(Float), max: Option(Float))
+  NumberKind(
+    suggestions: Suggestions(Float),
+    min: Option(Float),
+    max: Option(Float),
+  )
   /// Empty offers every channel type.
   ChannelKind(channel_types: List(channel.ChannelType))
   BooleanKind
@@ -141,52 +138,30 @@ pub type OptionKind {
   RoleKind
   MentionableKind
   AttachmentKind
-  /// A type added since this build. It keeps every field the option arrived
-  /// with, because nothing here knows which of them the new type allows and a
-  /// bulk overwrite sends back whatever was decoded. The modelled keys below
-  /// are the ones this build can read; `raw` is the whole payload, so a key
-  /// added since is not a key deleted on the next overwrite.
-  UnknownKind(
-    type_: Int,
-    choices: List(ApplicationCommandOptionChoice),
-    options: List(ApplicationCommandOption),
-    channel_types: List(channel.ChannelType),
-    min_value: Option(OptionNumberLimit),
-    max_value: Option(OptionNumberLimit),
-    min_length: Option(Int),
-    max_length: Option(Int),
-    autocomplete: Bool,
-    raw: component.RawPayload,
-  )
 }
 
 /// Where a STRING, INTEGER or NUMBER option gets its values from. Discord
 /// answers 50035 to choices beside `autocomplete`, so the two are one tag and
-/// the pair cannot be built.
-pub type Suggestions {
+/// the pair cannot be built. `v` is the option's own value type, so a STRING
+/// option with an integer choice does not typecheck either.
+pub type Suggestions(v) {
   /// Max 25.
-  Choices(List(ApplicationCommandOptionChoice))
+  Choices(List(ApplicationCommandOptionChoice(v)))
   Autocomplete
   NoSuggestions
 }
 
-/// A bound as it arrives on the wire, before the declared type narrows it to
-/// the `Int` or `Float` its kind holds. Whole for INTEGER, fractional for
-/// NUMBER.
-pub type OptionNumberLimit {
-  IntLimit(Int)
-  FloatLimit(Float)
-}
-
-pub type ApplicationCommandOptionChoice {
+pub type ApplicationCommandOptionChoice(v) {
   ApplicationCommandOptionChoice(
     name: String,
     name_localizations: Option(Dict(String, String)),
-    value: ChoiceValue,
+    value: v,
   )
 }
 
-/// A choice's value, in the type its option declares.
+/// A choice's value when the option's type is not known at compile time: an
+/// autocomplete response answers whichever option the user is typing. The
+/// three registered kinds hold the bare `String`, `Int` or `Float` instead.
 pub type ChoiceValue {
   StringChoice(String)
   IntChoice(Int)
@@ -313,13 +288,13 @@ pub fn sub_command_group(
   option(name, description, SubCommandGroupKind(options:))
 }
 
-pub fn command_type_from_int(value: Int) -> ApplicationCommandType {
+pub fn command_type_from_int(value: Int) -> Option(ApplicationCommandType) {
   case value {
-    1 -> ChatInput
-    2 -> UserCommand
-    3 -> MessageCommand
-    4 -> PrimaryEntryPoint
-    other -> UnknownCommandType(other)
+    1 -> Some(ChatInput)
+    2 -> Some(UserCommand)
+    3 -> Some(MessageCommand)
+    4 -> Some(PrimaryEntryPoint)
+    _ -> None
   }
 }
 
@@ -329,24 +304,19 @@ pub fn command_type_to_int(value: ApplicationCommandType) -> Int {
     UserCommand -> 2
     MessageCommand -> 3
     PrimaryEntryPoint -> 4
-    UnknownCommandType(other) -> other
   }
-}
-
-pub fn command_type_decoder() -> Decoder(ApplicationCommandType) {
-  wire.integer() |> decode.map(command_type_from_int)
 }
 
 pub fn command_type_to_json(value: ApplicationCommandType) -> Json {
   json.int(command_type_to_int(value))
 }
 
-pub fn context_type_from_int(value: Int) -> InteractionContextType {
+pub fn context_type_from_int(value: Int) -> Option(InteractionContextType) {
   case value {
-    0 -> GuildContext
-    1 -> BotDmContext
-    2 -> PrivateChannelContext
-    other -> UnknownContext(other)
+    0 -> Some(GuildContext)
+    1 -> Some(BotDmContext)
+    2 -> Some(PrivateChannelContext)
+    _ -> None
   }
 }
 
@@ -355,11 +325,10 @@ pub fn context_type_to_int(value: InteractionContextType) -> Int {
     GuildContext -> 0
     BotDmContext -> 1
     PrivateChannelContext -> 2
-    UnknownContext(other) -> other
   }
 }
 
-pub fn context_type_decoder() -> Decoder(InteractionContextType) {
+pub fn context_type_decoder() -> Decoder(Option(InteractionContextType)) {
   wire.integer() |> decode.map(context_type_from_int)
 }
 
@@ -367,11 +336,13 @@ pub fn context_type_to_json(value: InteractionContextType) -> Json {
   json.int(context_type_to_int(value))
 }
 
-pub fn integration_type_from_int(value: Int) -> ApplicationIntegrationType {
+pub fn integration_type_from_int(
+  value: Int,
+) -> Option(ApplicationIntegrationType) {
   case value {
-    0 -> GuildInstall
-    1 -> UserInstall
-    other -> UnknownIntegrationType(other)
+    0 -> Some(GuildInstall)
+    1 -> Some(UserInstall)
+    _ -> None
   }
 }
 
@@ -379,14 +350,10 @@ pub fn integration_type_to_int(value: ApplicationIntegrationType) -> Int {
   case value {
     GuildInstall -> 0
     UserInstall -> 1
-    UnknownIntegrationType(other) -> other
-    // Only ever a key Discord sent us, never something to send back, so -1 is
-    // a placeholder rather than a number that means anything.
-    UnknownIntegrationKey(_) -> -1
   }
 }
 
-pub fn integration_type_decoder() -> Decoder(ApplicationIntegrationType) {
+pub fn integration_type_decoder() -> Decoder(Option(ApplicationIntegrationType)) {
   wire.integer() |> decode.map(integration_type_from_int)
 }
 
@@ -394,32 +361,22 @@ pub fn integration_type_to_json(value: ApplicationIntegrationType) -> Json {
   json.int(integration_type_to_int(value))
 }
 
-/// From a JSON object KEY, the string "0" or "1". A key that is not a number
-/// keeps its text rather than failing the interaction.
-pub fn integration_type_key_decoder() -> Decoder(ApplicationIntegrationType) {
-  decode.string
-  |> decode.map(fn(key) {
-    case int.parse(key) {
-      Ok(value) -> integration_type_from_int(value)
-      Error(Nil) -> UnknownIntegrationKey(key)
-    }
-  })
-}
-
-pub fn option_type_from_int(value: Int) -> ApplicationCommandOptionType {
+pub fn option_type_from_int(
+  value: Int,
+) -> Option(ApplicationCommandOptionType) {
   case value {
-    1 -> SubCommand
-    2 -> SubCommandGroup
-    3 -> StringOption
-    4 -> IntegerOption
-    5 -> BooleanOption
-    6 -> UserOption
-    7 -> ChannelOption
-    8 -> RoleOption
-    9 -> MentionableOption
-    10 -> NumberOption
-    11 -> AttachmentOption
-    other -> UnknownOptionType(other)
+    1 -> Some(SubCommand)
+    2 -> Some(SubCommandGroup)
+    3 -> Some(StringOption)
+    4 -> Some(IntegerOption)
+    5 -> Some(BooleanOption)
+    6 -> Some(UserOption)
+    7 -> Some(ChannelOption)
+    8 -> Some(RoleOption)
+    9 -> Some(MentionableOption)
+    10 -> Some(NumberOption)
+    11 -> Some(AttachmentOption)
+    _ -> None
   }
 }
 
@@ -436,50 +393,11 @@ pub fn option_type_to_int(value: ApplicationCommandOptionType) -> Int {
     MentionableOption -> 9
     NumberOption -> 10
     AttachmentOption -> 11
-    UnknownOptionType(other) -> other
   }
-}
-
-pub fn option_type_decoder() -> Decoder(ApplicationCommandOptionType) {
-  wire.integer() |> decode.map(option_type_from_int)
 }
 
 pub fn option_type_to_json(value: ApplicationCommandOptionType) -> Json {
   json.int(option_type_to_int(value))
-}
-
-/// The declared type picks the variant, not the JSON: Discord writes a whole
-/// NUMBER bound as `5`, and sending an INTEGER bound as `5.0` is a 400. A type
-/// this build does not know takes either shape, so one new option type does not
-/// sink the whole response.
-pub fn number_limit_decoder(
-  option_type: ApplicationCommandOptionType,
-) -> Decoder(OptionNumberLimit) {
-  case option_type {
-    NumberOption -> wire.number() |> decode.map(FloatLimit)
-    IntegerOption -> wire.integer() |> decode.map(IntLimit)
-    _ ->
-      decode.one_of(wire.integer() |> decode.map(IntLimit), [
-        wire.number() |> decode.map(FloatLimit),
-      ])
-  }
-}
-
-/// A choice's value, likewise picked by the option's declared type, and
-/// likewise tolerant for a type this build does not know.
-pub fn choice_value_decoder(
-  option_type: ApplicationCommandOptionType,
-) -> Decoder(ChoiceValue) {
-  case option_type {
-    IntegerOption -> wire.integer() |> decode.map(IntChoice)
-    NumberOption -> wire.number() |> decode.map(FloatChoice)
-    StringOption -> decode.string |> decode.map(StringChoice)
-    _ ->
-      decode.one_of(decode.string |> decode.map(StringChoice), [
-        wire.integer() |> decode.map(IntChoice),
-        wire.number() |> decode.map(FloatChoice),
-      ])
-  }
 }
 
 pub fn choice_value_to_json(value: ChoiceValue) -> Json {
@@ -490,26 +408,19 @@ pub fn choice_value_to_json(value: ChoiceValue) -> Json {
   }
 }
 
-pub fn number_limit_to_json(value: OptionNumberLimit) -> Json {
-  case value {
-    IntLimit(number) -> json.int(number)
-    FloatLimit(number) -> json.float(number)
-  }
-}
-
 fn localizations_decoder() -> Decoder(Dict(String, String)) {
   decode.dict(decode.string, decode.string)
 }
 
 pub fn choice_decoder(
-  option_type: ApplicationCommandOptionType,
-) -> Decoder(ApplicationCommandOptionChoice) {
+  value: Decoder(v),
+) -> Decoder(ApplicationCommandOptionChoice(v)) {
   use name <- decode.field("name", decode.string)
   use name_localizations <- wire.opt_field(
     "name_localizations",
     localizations_decoder(),
   )
-  use value <- decode.field("value", choice_value_decoder(option_type))
+  use value <- decode.field("value", value)
   decode.success(ApplicationCommandOptionChoice(
     name:,
     name_localizations:,
@@ -517,138 +428,107 @@ pub fn choice_decoder(
   ))
 }
 
-pub fn option_decoder() -> Decoder(ApplicationCommandOption) {
+/// An option whose type this build has no name for yields `None`, so `options`
+/// holds only what it can name.
+pub fn option_decoder() -> Decoder(Option(ApplicationCommandOption)) {
   use <- decode.recursive
-  use raw <- wire.raw()
   use declared <- decode.field("type", wire.integer())
-  let type_ = option_type_from_int(declared)
-  use name <- decode.field("name", decode.string)
-  use name_localizations <- wire.opt_field(
-    "name_localizations",
-    localizations_decoder(),
-  )
-  use description <- wire.string_field("description", "")
-  use description_localizations <- wire.opt_field(
-    "description_localizations",
-    localizations_decoder(),
-  )
-  use required <- wire.flag_field("required", False)
-  use choices <- wire.list_field("choices", choice_decoder(type_))
-  use options <- wire.list_field("options", option_decoder())
-  use channel_types <- wire.list_field(
-    "channel_types",
-    channel.channel_type_decoder(),
-  )
-  use min_value <- wire.opt_field("min_value", number_limit_decoder(type_))
-  use max_value <- wire.opt_field("max_value", number_limit_decoder(type_))
-  use min_length <- wire.opt_field("min_length", wire.integer())
-  use max_length <- wire.opt_field("max_length", wire.integer())
-  use autocomplete <- wire.flag_field("autocomplete", False)
-  use name_localized <- wire.opt_field("name_localized", decode.string)
-  use description_localized <- wire.opt_field(
-    "description_localized",
-    decode.string,
-  )
-  // Every key the option family can carry is read, then the declared type says
-  // which of them this option actually has. The rest are Discord sending a
-  // field its own docs forbid, and they go no further than here.
-  let kind = case type_ {
-    SubCommand -> SubCommandKind(options:)
-    SubCommandGroup -> SubCommandGroupKind(options:)
-    StringOption ->
-      StringKind(
-        suggestions: suggestions_from(choices, autocomplete),
-        min_length:,
-        max_length:,
+  case option_type_from_int(declared) {
+    None -> decode.success(None)
+    Some(type_) -> {
+      use name <- decode.field("name", decode.string)
+      use name_localizations <- wire.opt_field(
+        "name_localizations",
+        localizations_decoder(),
       )
-    IntegerOption ->
-      IntegerKind(
-        suggestions: suggestions_from(choices, autocomplete),
-        min: whole(min_value),
-        max: whole(max_value),
+      use description <- wire.string_field("description", "")
+      use description_localizations <- wire.opt_field(
+        "description_localizations",
+        localizations_decoder(),
       )
-    NumberOption ->
-      NumberKind(
-        suggestions: suggestions_from(choices, autocomplete),
-        min: fractional(min_value),
-        max: fractional(max_value),
+      use required <- wire.flag_field("required", False)
+      use options <- wire.known_list_field("options", option_decoder())
+      use channel_types <- wire.known_list_field(
+        "channel_types",
+        channel.channel_type_decoder(),
       )
-    ChannelOption -> ChannelKind(channel_types:)
-    BooleanOption -> BooleanKind
-    UserOption -> UserKind
-    RoleOption -> RoleKind
-    MentionableOption -> MentionableKind
-    AttachmentOption -> AttachmentKind
-    // An unknown type is the one case that cannot be narrowed, so it keeps
-    // everything, the payload included: dropping a key here would delete it
-    // from the command on the next bulk overwrite.
-    UnknownOptionType(other) ->
-      UnknownKind(
-        type_: other,
-        choices:,
-        options:,
-        channel_types:,
-        min_value:,
-        max_value:,
-        min_length:,
-        max_length:,
-        autocomplete:,
-        raw: raw_payload(raw),
+      use min_length <- wire.opt_field("min_length", wire.integer())
+      use max_length <- wire.opt_field("max_length", wire.integer())
+      use autocomplete <- wire.flag_field("autocomplete", False)
+      use name_localized <- wire.opt_field("name_localized", decode.string)
+      use description_localized <- wire.opt_field(
+        "description_localized",
+        decode.string,
       )
+      // Every shared key is read once above and the declared type says which
+      // of them this option keeps. Bounds and choices are read per arm
+      // because their Gleam type follows the option's declared type, so
+      // there is no shared shape to decode once and narrow.
+      use kind <- decode.then(case type_ {
+        SubCommand -> decode.success(SubCommandKind(options:))
+        SubCommandGroup -> decode.success(SubCommandGroupKind(options:))
+        StringOption -> {
+          use suggestions <- suggestions_field(decode.string, autocomplete)
+          decode.success(StringKind(suggestions:, min_length:, max_length:))
+        }
+        IntegerOption -> {
+          use suggestions <- suggestions_field(wire.integer(), autocomplete)
+          use min <- wire.opt_field("min_value", wire.integer())
+          use max <- wire.opt_field("max_value", wire.integer())
+          decode.success(IntegerKind(suggestions:, min:, max:))
+        }
+        NumberOption -> {
+          use suggestions <- suggestions_field(wire.number(), autocomplete)
+          use min <- wire.opt_field("min_value", wire.number())
+          use max <- wire.opt_field("max_value", wire.number())
+          decode.success(NumberKind(suggestions:, min:, max:))
+        }
+        ChannelOption -> decode.success(ChannelKind(channel_types:))
+        BooleanOption -> decode.success(BooleanKind)
+        UserOption -> decode.success(UserKind)
+        RoleOption -> decode.success(RoleKind)
+        MentionableOption -> decode.success(MentionableKind)
+        AttachmentOption -> decode.success(AttachmentKind)
+      })
+      decode.success(
+        Some(ApplicationCommandOption(
+          name:,
+          name_localizations:,
+          description:,
+          description_localizations:,
+          required:,
+          kind:,
+          name_localized:,
+          description_localized:,
+        )),
+      )
+    }
   }
-  decode.success(ApplicationCommandOption(
-    name:,
-    name_localizations:,
-    description:,
-    description_localizations:,
-    required:,
-    kind:,
-    name_localized:,
-    description_localized:,
-  ))
 }
 
-/// `RawPayload` is `glyde/component`'s, so the two places that keep an
-/// unmodelled payload keep it the same way. The failure arm is unreachable
-/// from here: `option_decoder` has already read this value as an object.
-fn raw_payload(value: Dynamic) -> component.RawPayload {
-  component.raw_payload(value)
-  |> result.lazy_unwrap(component.empty_raw_payload)
-}
-
-/// Discord never sends both, and if it ever did the choices are the half that
-/// carries data, so they win.
-fn suggestions_from(
-  choices: List(ApplicationCommandOptionChoice),
+/// Discord never sends choices beside `autocomplete`, and if it ever did the
+/// choices are the half that carries data, so they win.
+fn suggestions_field(
+  value: Decoder(v),
   autocomplete: Bool,
-) -> Suggestions {
-  case choices, autocomplete {
+  next: fn(Suggestions(v)) -> Decoder(a),
+) -> Decoder(a) {
+  use choices <- wire.list_field("choices", choice_decoder(value))
+  next(case choices, autocomplete {
     [], False -> NoSuggestions
     [], True -> Autocomplete
     _, _ -> Choices(choices)
-  }
-}
-
-/// `number_limit_decoder` picked the variant from the declared type, so an
-/// INTEGER bound is already whole and a NUMBER one already fractional. The
-/// other arm cannot be reached from `option_decoder`.
-fn whole(limit: Option(OptionNumberLimit)) -> Option(Int) {
-  case limit {
-    Some(IntLimit(value)) -> Some(value)
-    _ -> None
-  }
-}
-
-fn fractional(limit: Option(OptionNumberLimit)) -> Option(Float) {
-  case limit {
-    Some(FloatLimit(value)) -> Some(value)
-    _ -> None
-  }
+  })
 }
 
 pub fn decoder() -> Decoder(ApplicationCommand) {
   use id <- decode.field("id", id.decoder())
-  use type_ <- wire.defaulted_field("type", command_type_decoder(), ChatInput)
+  use type_ <- wire.type_or(
+    "type",
+    command_type_from_int,
+    ChatInput,
+    "ApplicationCommandType",
+  )
   use application_id <- decode.field("application_id", id.decoder())
   use guild_id <- wire.opt_field("guild_id", id.decoder())
   use name <- decode.field("name", decode.string)
@@ -661,20 +541,20 @@ pub fn decoder() -> Decoder(ApplicationCommand) {
     "description_localizations",
     localizations_decoder(),
   )
-  use options <- wire.list_field("options", option_decoder())
+  use options <- wire.known_list_field("options", option_decoder())
   use default_member_permissions <- wire.opt_field(
     "default_member_permissions",
     permissions.decoder(),
   )
   use dm_permission <- wire.opt_field("dm_permission", decode.bool)
   use nsfw <- wire.flag_field("nsfw", False)
-  use integration_types <- wire.list_field(
+  use integration_types <- wire.known_list_field(
     "integration_types",
     integration_type_decoder(),
   )
   use contexts <- wire.opt_field(
     "contexts",
-    decode.list(context_type_decoder()),
+    decode.list(context_type_decoder()) |> decode.map(option.values),
   )
   use version <- wire.string_field("version", "")
   use name_localized <- wire.opt_field("name_localized", decode.string)
@@ -703,68 +583,46 @@ pub fn decoder() -> Decoder(ApplicationCommand) {
   ))
 }
 
-pub fn choice_to_json(choice: ApplicationCommandOptionChoice) -> Json {
+pub fn choice_to_json(
+  choice: ApplicationCommandOptionChoice(v),
+  encode: fn(v) -> Json,
+) -> Json {
   wire.object([
-    #("name", wire.put(wire.present(choice.name), json.string)),
+    #("name", wire.put(Present(choice.name), json.string)),
     #(
       "name_localizations",
       wire.put(wire.opt(choice.name_localizations), localizations_to_json),
     ),
-    #("value", wire.put(wire.present(choice.value), choice_value_to_json)),
+    #("value", wire.put(Present(choice.value), encode)),
   ])
 }
 
 pub fn option_to_json(option: ApplicationCommandOption) -> Json {
-  let modelled =
-    wire.entries(
-      list.flatten([
-        [
-          #(
-            "type",
-            wire.put(
-              wire.present(option_kind_type(option.kind)),
-              option_type_to_json,
-            ),
+  wire.object(
+    list.flatten([
+      [
+        #(
+          "type",
+          wire.put(Present(option_kind_type(option.kind)), option_type_to_json),
+        ),
+        #("name", wire.put(Present(option.name), json.string)),
+        #(
+          "name_localizations",
+          wire.put(wire.opt(option.name_localizations), localizations_to_json),
+        ),
+        #("description", wire.put(Present(option.description), json.string)),
+        #(
+          "description_localizations",
+          wire.put(
+            wire.opt(option.description_localizations),
+            localizations_to_json,
           ),
-          #("name", wire.put(wire.present(option.name), json.string)),
-          #(
-            "name_localizations",
-            wire.put(wire.opt(option.name_localizations), localizations_to_json),
-          ),
-          #(
-            "description",
-            wire.put(wire.present(option.description), json.string),
-          ),
-          #(
-            "description_localizations",
-            wire.put(
-              wire.opt(option.description_localizations),
-              localizations_to_json,
-            ),
-          ),
-          #("required", wire.put(wire.present(option.required), json.bool)),
-        ],
-        kind_entries(option.kind),
-      ]),
-    )
-  json.object(list.append(modelled, unmodelled_entries(option.kind, modelled)))
-}
-
-/// What an unknown option type arrived with and this build has no field for.
-/// The modelled keys are written first and win, so an edit to `name` is not
-/// undone by the name the option was decoded from.
-fn unmodelled_entries(
-  kind: OptionKind,
-  written: List(#(String, Json)),
-) -> List(#(String, Json)) {
-  case kind {
-    UnknownKind(raw:, ..) ->
-      component.raw_payload_entries(raw)
-      |> list.filter(fn(entry) {
-        !list.any(written, fn(already) { already.0 == entry.0 })
-      })
-    _ -> []
-  }
+        ),
+        #("required", wire.put(Present(option.required), json.bool)),
+      ],
+      kind_entries(option.kind),
+    ]),
+  )
 }
 
 /// An option list as Discord wants it: every required option first, or it
@@ -790,14 +648,12 @@ pub fn option_kind_type(kind: OptionKind) -> ApplicationCommandOptionType {
     RoleKind -> RoleOption
     MentionableKind -> MentionableOption
     AttachmentKind -> AttachmentOption
-    UnknownKind(type_:, ..) -> UnknownOptionType(type_)
   }
 }
 
 /// Only the keys the kind actually has. `autocomplete` is one of them: Discord
-/// takes it on STRING, INTEGER and NUMBER, and on a type this build has never
-/// seen, where the key came from Discord in the first place.
-fn kind_entries(kind: OptionKind) -> List(#(String, wire.Field(Json))) {
+/// takes it on STRING, INTEGER and NUMBER.
+fn kind_entries(kind: OptionKind) -> List(#(String, Field(Json))) {
   case kind {
     SubCommandKind(options:) | SubCommandGroupKind(options:) -> [
       #("options", wire.put(wire.opt_list(options), options_to_json)),
@@ -805,7 +661,7 @@ fn kind_entries(kind: OptionKind) -> List(#(String, wire.Field(Json))) {
 
     StringKind(suggestions:, min_length:, max_length:) ->
       list.flatten([
-        suggestion_entries(suggestions),
+        suggestion_entries(suggestions, json.string),
         [
           #("min_length", wire.put(wire.opt(min_length), json.int)),
           #("max_length", wire.put(wire.opt(max_length), json.int)),
@@ -814,7 +670,7 @@ fn kind_entries(kind: OptionKind) -> List(#(String, wire.Field(Json))) {
 
     IntegerKind(suggestions:, min:, max:) ->
       list.flatten([
-        suggestion_entries(suggestions),
+        suggestion_entries(suggestions, json.int),
         [
           #("min_value", wire.put(wire.opt(min), json.int)),
           #("max_value", wire.put(wire.opt(max), json.int)),
@@ -823,7 +679,7 @@ fn kind_entries(kind: OptionKind) -> List(#(String, wire.Field(Json))) {
 
     NumberKind(suggestions:, min:, max:) ->
       list.flatten([
-        suggestion_entries(suggestions),
+        suggestion_entries(suggestions, json.float),
         [
           #("min_value", wire.put(wire.opt(min), json.float)),
           #("max_value", wire.put(wire.opt(max), json.float)),
@@ -841,44 +697,20 @@ fn kind_entries(kind: OptionKind) -> List(#(String, wire.Field(Json))) {
     ]
 
     BooleanKind | UserKind | RoleKind | MentionableKind | AttachmentKind -> []
-
-    // Everything this build can read, back out the way it came in. What it
-    // cannot read is written after these by `unmodelled_entries`.
-    UnknownKind(
-      type_: _,
-      choices:,
-      options:,
-      channel_types:,
-      min_value:,
-      max_value:,
-      min_length:,
-      max_length:,
-      autocomplete:,
-      raw: _,
-    ) -> [
-      #("choices", wire.put_list(wire.opt_list(choices), choice_to_json)),
-      #("options", wire.put(wire.opt_list(options), options_to_json)),
-      #(
-        "channel_types",
-        wire.put_list(
-          wire.opt_list(channel_types),
-          channel.channel_type_to_json,
-        ),
-      ),
-      #("min_value", wire.put(wire.opt(min_value), number_limit_to_json)),
-      #("max_value", wire.put(wire.opt(max_value), number_limit_to_json)),
-      #("min_length", wire.put(wire.opt(min_length), json.int)),
-      #("max_length", wire.put(wire.opt(max_length), json.int)),
-      #("autocomplete", autocomplete_entry(autocomplete)),
-    ]
   }
 }
 
 /// One key or the other, never the pair.
-fn suggestion_entries(value: Suggestions) -> List(#(String, wire.Field(Json))) {
+fn suggestion_entries(
+  value: Suggestions(v),
+  encode: fn(v) -> Json,
+) -> List(#(String, Field(Json))) {
   case value {
     Choices(choices) -> [
-      #("choices", wire.put_list(wire.opt_list(choices), choice_to_json)),
+      #(
+        "choices",
+        wire.put_list(wire.opt_list(choices), choice_to_json(_, encode)),
+      ),
     ]
     Autocomplete -> [#("autocomplete", autocomplete_entry(True))]
     NoSuggestions -> []
@@ -886,10 +718,10 @@ fn suggestion_entries(value: Suggestions) -> List(#(String, wire.Field(Json))) {
 }
 
 /// False is Discord's default, so it is the same key left out.
-fn autocomplete_entry(value: Bool) -> wire.Field(Json) {
+fn autocomplete_entry(value: Bool) -> Field(Json) {
   case value {
-    True -> wire.put(wire.present(True), json.bool)
-    False -> wire.absent()
+    True -> wire.put(Present(True), json.bool)
+    False -> Absent
   }
 }
 
@@ -1342,7 +1174,7 @@ pub fn set_guild_commands(
 }
 
 fn localizations_param(wanted: Bool) -> List(query.Param) {
-  query.one("with_localizations", query.flag(wanted))
+  query.one("with_localizations", wanted, query.flag)
 }
 
 fn global_at(application: id.ApplicationId) -> List(seg.Seg) {

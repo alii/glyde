@@ -67,7 +67,7 @@ const a_channel = "{\"id\":\"20\",\"type\":0,\"name\":\"general\"}"
 
 const a_message = "{\"id\":\"30\",\"channel_id\":\"20\",\"author\":"
   <> a_user
-  <> ",\"content\":\"hi\"}"
+  <> ",\"content\":\"hi\",\"type\":0}"
 
 const a_guild = "{\"id\":\"10\",\"name\":\"home\",\"owner_id\":\"70\"}"
 

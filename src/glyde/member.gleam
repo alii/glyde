@@ -26,8 +26,8 @@ pub type GuildMember {
     avatar: Option(String),
     banner: Option(String),
     roles: List(id.RoleId),
-    /// Null means the member was invited as a guest. Absent on some partials.
-    joined_at: Option(String),
+    /// Null means invited as a guest; Absent on some partials.
+    joined_at: Field(String),
     /// ISO-8601, when the member started boosting the guild.
     premium_since: Option(String),
     deaf: Option(Bool),
@@ -39,7 +39,7 @@ pub type GuildMember {
     pending: Option(Bool),
     /// Interactions only, and scoped to the interaction's channel, not the
     /// guild.
-    permissions: Option(permissions.Permissions),
+    permissions: Option(permissions.Effective),
     /// ISO-8601 expiry of a timeout. A past time is not a timeout either, so
     /// compare it against the clock instead of testing for null.
     communication_disabled_until: Option(String),
@@ -118,13 +118,13 @@ pub fn decoder() -> Decoder(GuildMember) {
   use avatar <- wire.opt_field("avatar", decode.string)
   use banner <- wire.opt_field("banner", decode.string)
   use roles <- wire.list_field("roles", id.decoder())
-  use joined_at <- wire.opt_field("joined_at", decode.string)
+  use joined_at <- wire.tri_field("joined_at", decode.string)
   use premium_since <- wire.opt_field("premium_since", decode.string)
   use deaf <- wire.opt_field("deaf", decode.bool)
   use mute <- wire.opt_field("mute", decode.bool)
   use decoded_flags <- wire.opt_field("flags", flags.decoder())
   use pending <- wire.opt_field("pending", decode.bool)
-  use perms <- wire.opt_field("permissions", permissions.decoder())
+  use perms <- wire.opt_field("permissions", permissions.effective_decoder())
   use communication_disabled_until <- wire.opt_field(
     "communication_disabled_until",
     decode.string,
@@ -146,7 +146,7 @@ pub fn decoder() -> Decoder(GuildMember) {
   ))
 }
 
-// -- Bodies for /guilds/{g}/members and /guilds/{g}/bans ---------------------
+// -- Bodies for /guilds/{g}/members ------------------------------------------
 
 /// `PATCH /guilds/{g}/members/{u}`.
 pub type EditGuildMember {
@@ -223,29 +223,6 @@ pub fn edit_current_member_body(payload: EditCurrentMember) -> Body {
       #("avatar", wire.put(payload.avatar, image.to_json)),
       #("banner", wire.put(payload.banner, image.to_json)),
       #("bio", wire.put(payload.bio, json.string)),
-    ]),
-  )
-}
-
-/// `PUT /guilds/{g}/bans/{u}`.
-pub type CreateBan {
-  /// 0 to 604800 seconds, seven days. Deletes the user's recent messages
-  /// along with the ban.
-  CreateBan(delete_message_seconds: Option(Int))
-}
-
-/// A ban that leaves the user's messages where they are.
-pub fn create_ban() -> CreateBan {
-  CreateBan(delete_message_seconds: None)
-}
-
-pub fn create_ban_body(payload: CreateBan) -> Body {
-  body.json(
-    wire.entries([
-      #(
-        "delete_message_seconds",
-        wire.put(wire.opt(payload.delete_message_seconds), json.int),
-      ),
     ]),
   )
 }

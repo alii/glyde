@@ -8,7 +8,7 @@
 import gleam/dynamic/decode.{type Decoder}
 import gleam/option.{type Option, None}
 import glyde/flags.{type Flags}
-import glyde/gateway.{type Sharding}
+import glyde/gateway/identify.{type Sharding}
 import glyde/id
 import glyde/user.{type CurrentUser}
 import glyde/wire
@@ -116,11 +116,8 @@ fn guild_stub_decoder() -> Decoder(id.GuildId) {
 /// Failing sends the whole object through `soft_field` to `None` instead.
 pub fn partial_application_decoder() -> Decoder(PartialApplication) {
   use application_id <- decode.field("id", id.decoder())
-  use flag_bits <- decode.field("flags", wire.integer())
-  decode.success(PartialApplication(
-    id: application_id,
-    flags: flags.from_int(flag_bits),
-  ))
+  use flags <- decode.field("flags", flags.decoder())
+  decode.success(PartialApplication(id: application_id, flags:))
 }
 
 /// `[index, count]` exactly, and a pair the gateway would refuse with close
@@ -132,7 +129,7 @@ fn shard_decoder() -> Decoder(Option(Sharding)) {
   )
   case values {
     [index, count] ->
-      decode.success(option.from_result(gateway.sharding(index:, count:)))
+      decode.success(option.from_result(identify.sharding(index:, count:)))
     _ -> decode.success(None)
   }
 }

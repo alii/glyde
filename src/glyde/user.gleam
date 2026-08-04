@@ -111,22 +111,22 @@ pub fn has_flag(bits: UserFlags, flag: UserFlag) -> Bool {
   flags.has_bit(bits, user_flag_bit(flag))
 }
 
-/// Which Nitro the account pays for.
+/// Which Nitro the account pays for. A value this build has no name for
+/// decodes as `None`.
 pub type PremiumType {
   NoPremium
   NitroClassic
   Nitro
   NitroBasic
-  UnknownPremiumType(Int)
 }
 
-pub fn premium_type_from_int(value: Int) -> PremiumType {
+pub fn premium_type_from_int(value: Int) -> Option(PremiumType) {
   case value {
-    0 -> NoPremium
-    1 -> NitroClassic
-    2 -> Nitro
-    3 -> NitroBasic
-    other -> UnknownPremiumType(other)
+    0 -> Some(NoPremium)
+    1 -> Some(NitroClassic)
+    2 -> Some(Nitro)
+    3 -> Some(NitroBasic)
+    _ -> None
   }
 }
 
@@ -136,12 +136,7 @@ pub fn premium_type_to_int(value: PremiumType) -> Int {
     NitroClassic -> 1
     Nitro -> 2
     NitroBasic -> 3
-    UnknownPremiumType(other) -> other
   }
-}
-
-pub fn premium_type_decoder() -> Decoder(PremiumType) {
-  wire.integer() |> decode.map(premium_type_from_int)
 }
 
 pub fn premium_type_to_json(value: PremiumType) -> Json {
@@ -205,7 +200,7 @@ pub fn current_user_decoder() -> Decoder(CurrentUser) {
   use user <- decode.then(decoder())
   use locale <- wire.opt_field("locale", decode.string)
   use user_flags <- wire.opt_field("flags", flags.decoder())
-  use premium_type <- wire.opt_field("premium_type", premium_type_decoder())
+  use premium_type <- wire.known_field("premium_type", premium_type_from_int)
   use mfa_enabled <- wire.flag_field("mfa_enabled", False)
   use verified <- wire.opt_field("verified", decode.bool)
   use email <- wire.opt_field("email", decode.string)

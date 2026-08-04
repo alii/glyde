@@ -53,7 +53,6 @@ pub fn execute(
   thread thread: Option(id.ChannelId),
 ) -> Call(Nil) {
   rest.post(webhook_at(credential), body, rest.NoContent(Nil))
-  |> rest.path_authenticated
   |> rest.query(thread_param(thread))
 }
 
@@ -65,9 +64,8 @@ pub fn execute_and_wait(
   thread thread: Option(id.ChannelId),
 ) -> Call(Message) {
   rest.post(webhook_at(credential), body, rest.Decoded(message.decoder()))
-  |> rest.path_authenticated
   |> rest.query(
-    list.flatten([query.one("wait", query.flag(True)), thread_param(thread)]),
+    list.flatten([query.one("wait", True, query.flag), thread_param(thread)]),
   )
 }
 
@@ -76,7 +74,6 @@ pub fn get_original_message(
   thread thread: Option(id.ChannelId),
 ) -> Call(Message) {
   rest.get(original_at(credential), rest.Decoded(message.decoder()))
-  |> rest.path_authenticated
   |> rest.query(thread_param(thread))
 }
 
@@ -88,7 +85,6 @@ pub fn edit_original_message(
   thread thread: Option(id.ChannelId),
 ) -> Call(Message) {
   rest.patch(original_at(credential), body, rest.Decoded(message.decoder()))
-  |> rest.path_authenticated
   |> rest.query(thread_param(thread))
 }
 
@@ -97,7 +93,6 @@ pub fn delete_original_message(
   thread thread: Option(id.ChannelId),
 ) -> Call(Nil) {
   rest.delete(original_at(credential), rest.NoContent(Nil))
-  |> rest.path_authenticated
   |> rest.query(thread_param(thread))
 }
 
@@ -107,7 +102,6 @@ pub fn get_message(
   thread thread: Option(id.ChannelId),
 ) -> Call(Message) {
   rest.get(message_at(credential, message), rest.Decoded(message.decoder()))
-  |> rest.path_authenticated
   |> rest.query(thread_param(thread))
 }
 
@@ -122,7 +116,6 @@ pub fn edit_message(
     body,
     rest.Decoded(message.decoder()),
   )
-  |> rest.path_authenticated
   |> rest.query(thread_param(thread))
 }
 
@@ -132,7 +125,6 @@ pub fn delete_message(
   thread thread: Option(id.ChannelId),
 ) -> Call(Nil) {
   rest.delete(message_at(credential, message), rest.NoContent(Nil))
-  |> rest.path_authenticated
   |> rest.query(thread_param(thread))
 }
 
@@ -144,7 +136,7 @@ fn thread_param(thread: Option(id.ChannelId)) -> List(query.Param) {
 /// The token is still half the bucket key, deliberately: two webhooks on one
 /// channel have separate limits. The limiter drops idle buckets on a `Tick`.
 fn webhook_at(credential: Credential) -> List(seg.Seg) {
-  [seg.lit("webhooks"), ..seg.webhook(credential.webhook, credential.reveal())]
+  [seg.lit("webhooks"), seg.webhook(credential.webhook, credential.reveal())]
 }
 
 fn original_at(credential: Credential) -> List(seg.Seg) {

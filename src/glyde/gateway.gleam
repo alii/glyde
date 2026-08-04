@@ -29,16 +29,18 @@ import glyde/gateway/backoff
 import glyde/gateway/close
 import glyde/gateway/command.{type Command}
 import glyde/gateway/frame.{type Outbound}
+import glyde/gateway/identify
 import glyde/gateway/presence.{type Presence}
 import glyde/gateway/ready
 import glyde/gateway/reassembly
 import glyde/id.{type Id}
 import glyde/intents.{type Intents}
+import glyde/token
 
 // The two imports here that are not the gateway's own, both dependency-free:
 // a constant module, so the REST half and this one cannot drift apart, and the
 // host type, so the thing a shard dials is not a bare `String`.
-import glyde/internal/url
+import glyde/internal/host
 import glyde/internal/version
 import glyde/rng.{type Rng}
 
@@ -71,25 +73,24 @@ pub type Stamps {
 /// hands out has a scheme, so the two are different types and a `wss://…`
 /// cannot reach a slot that dials.
 pub type Host =
-  url.Host
+  host.Host
 
 /// The host of a gateway URL, scheme and path and query dropped. `Error(Nil)`
 /// when there is nothing in it to dial.
 pub fn host_of(url from: String) -> Result(Host, Nil) {
-  url.host_of(from)
+  host.host_of(from)
 }
 
 /// For a log line or a URL an adapter is building. The core hands out `Host`
 /// everywhere else, so this is the one direction that needs asking for.
 pub fn host_to_string(host: Host) -> String {
-  url.to_string(host)
+  host.to_string(host)
 }
 
 /// Discord's front door, and what `config` fills `Config.host` with. `GET
 /// /gateway/bot` may name another one; a RESUME goes to the host READY named.
 pub fn default_host() -> Host {
-  let assert Ok(host) = url.host_of("gateway.discord.gg")
-  host
+  host.discord_gateway
 }
 
 /// Everything that does not change over a shard's life. `config/2` defaults
@@ -101,7 +102,7 @@ pub fn default_host() -> Host {
 /// ```
 pub type Config {
   Config(
-    token: String,
+    token: token.Token,
     intents: Intents,
     sharding: Sharding,
     /// Sent in IDENTIFY. Analytics only; Discord does not act on it.
@@ -123,23 +124,23 @@ pub type Config {
   )
 }
 
-// The four values IDENTIFY carries live in `glyde/gateway/frame`, next to the
-// encoder that writes them: the wire type is the one that knows what Discord
-// accepts, so a range is checked once, where the value is made, and nothing
-// downstream can hold one that is out of it. Re-exported here because a host
-// configures a shard through this module alone.
+// The four values IDENTIFY carries live in `glyde/gateway/identify`, next to
+// the encoder that writes them: the wire type is the one that knows what
+// Discord accepts, so a range is checked once, where the value is made, and
+// nothing downstream can hold one that is out of it. Re-exported here because
+// a host configures a shard through this module alone.
 
 pub type Sharding =
-  frame.Sharding
+  identify.Sharding
 
 pub type ShardingError =
-  frame.ShardingError
+  identify.ShardingError
 
 pub type Properties =
-  frame.Properties
+  identify.Properties
 
 pub type LargeThreshold =
-  frame.LargeThreshold
+  identify.LargeThreshold
 
 /// `sharding(index: 0, count: 1)` is an unsharded bot, which Discord reads as
 /// sending no shard array at all. `index` is 0-based and must be below
@@ -149,17 +150,17 @@ pub fn sharding(
   index index: Int,
   count count: Int,
 ) -> Result(Sharding, ShardingError) {
-  frame.sharding(index:, count:)
+  identify.sharding(index:, count:)
 }
 
 /// This shard's 0-based place in the fleet.
 pub fn shard_index(sharding: Sharding) -> Int {
-  frame.shard_index(sharding)
+  identify.shard_index(sharding)
 }
 
 /// How many shards the fleet has.
 pub fn shard_count(sharding: Sharding) -> Int {
-  frame.shard_count(sharding)
+  identify.shard_count(sharding)
 }
 
 /// Fills `Config.properties`. Discord logs these and acts on none of them.
@@ -168,18 +169,18 @@ pub fn properties(
   browser browser: String,
   device device: String,
 ) -> Properties {
-  frame.Properties(os:, browser:, device:)
+  identify.Properties(os:, browser:, device:)
 }
 
 /// Discord's rule, not ours: `large_threshold` is 50 to 250, and a value
 /// outside it is clamped here rather than at the handshake.
 pub fn large_threshold(value: Int) -> LargeThreshold {
-  frame.large_threshold(value)
+  identify.large_threshold(value)
 }
 
 /// The number `Config.large_threshold` holds, after the clamp.
 pub fn large_threshold_value(threshold: LargeThreshold) -> Int {
-  frame.large_threshold_value(threshold)
+  identify.large_threshold_value(threshold)
 }
 
 pub type Compression {
@@ -227,16 +228,13 @@ pub type Tuning {
   )
 }
 
-/// Hard-coded, because a pure core cannot read a platform name.
-const default_os: String = "erlang"
-
 /// The mandatory fields, with everything else defaulted.
-pub fn config(token token: String, intents intents: Intents) -> Config {
+pub fn config(token token: token.Token, intents intents: Intents) -> Config {
   Config(
     token:,
     intents:,
-    sharding: frame.unsharded(),
-    properties: properties(os: default_os, browser: "glyde", device: "glyde"),
+    sharding: identify.unsharded(),
+    properties: properties(os: "glyde", browser: "glyde", device: "glyde"),
     host: default_host(),
     api_version: version.number,
     compression: NoCompression,
@@ -258,8 +256,9 @@ pub fn config(token token: String, intents intents: Intents) -> Config {
   )
 }
 
-/// One shard's complete protocol state.
-pub type Shard {
+/// One shard's complete protocol state. Opaque so every `Shard` has passed
+/// through `new` or `resuming`, which is the only place `normalise` runs.
+pub opaque type Shard {
   Shard(
     config: Config,
     phase: Phase,
@@ -412,6 +411,17 @@ pub fn disarm(deadlines: List(Deadline), timer: Timer) -> List(Deadline) {
   list.filter(deadlines, fn(deadline) { deadline.timer != timer })
 }
 
+/// The nearest instant across the armed timers, or `None` when nothing is
+/// waiting. An adapter turns this into how long its receive may block.
+pub fn soonest(deadlines: List(Deadline)) -> Option(Int) {
+  list.fold(deadlines, None, fn(best, deadline) {
+    case best {
+      Some(at) if at <= deadline.at -> best
+      _ -> Some(deadline.at)
+    }
+  })
+}
+
 /// Why a WebSocket upgrade never came up. Discord answers a dead token with
 /// 401 and a bot dialling too often with 429, and the two need different
 /// answers, so the status travels rather than being flattened into prose.
@@ -475,14 +485,15 @@ pub type Output {
   /// `&compress=`; the adapter must not modify it.
   Open(conn: Conn, host: Host, path: String)
 
-  /// Send `frame.text` as a text frame. Fire and forget: an adapter whose
-  /// send fails reports `Closed(conn, None)` and never throws. The opcode
-  /// rides along for logging, so nothing has to parse the payload back.
+  /// Send `frame.outbound_text(frame)` as a text frame. Fire and forget: an
+  /// adapter whose send fails reports `Closed(conn, None)` and never throws.
+  /// `frame.outbound_op` rides along for logging, so nothing has to parse the
+  /// payload back.
   Send(frame: Outbound)
 
   /// Send a close frame with this code, then tear the socket down. Only 1000,
   /// which invalidates the session, or 4000, which keeps it resumable.
-  Close(code: Int)
+  Close(code: close.SendCode)
 
   /// Abandon the transport with no close frame: the peer already closed, or
   /// nothing was ever connected.
@@ -600,7 +611,7 @@ pub type Notice {
 
 /// The two ways a connection's bytes stop being trustworthy. Its own type and
 /// not a `Notice`, because only these two tear the connection down.
-pub type Corruption {
+type Corruption {
   BufferFull(bytes: Int)
   InflateBroke(why: InflateFailure)
 }
@@ -871,6 +882,70 @@ pub fn is_terminal(shard: Shard) -> Bool {
   }
 }
 
+pub fn phase(shard: Shard) -> Phase {
+  shard.phase
+}
+
+pub fn shard_config(shard: Shard) -> Config {
+  shard.config
+}
+
+@internal
+pub fn attempts(shard: Shard) -> Int {
+  shard.attempts
+}
+
+@internal
+pub fn stamps(shard: Shard) -> Stamps {
+  shard.stamps
+}
+
+@internal
+pub fn pending(shard: Shard) -> List(Command) {
+  shard.pending
+}
+
+@internal
+pub fn inbound(shard: Shard) -> Inbound {
+  shard.inbound
+}
+
+@internal
+pub fn shard_rng(shard: Shard) -> Rng {
+  shard.rng
+}
+
+pub fn with_compression(shard: Shard, compression: Compression) -> Shard {
+  Shard(..shard, config: Config(..shard.config, compression:))
+}
+
+@internal
+pub fn with_rng(shard: Shard, rng: Rng) -> Shard {
+  Shard(..shard, rng:)
+}
+
+/// Place the shard at `phase`. For a test that would otherwise drive many
+/// steps to reach it. Never touches `config`, so `normalise` still holds.
+@internal
+pub fn with_phase(shard: Shard, phase: Phase) -> Shard {
+  Shard(..shard, phase:)
+}
+
+@internal
+pub fn with_attempts(shard: Shard, attempts: Int) -> Shard {
+  Shard(..shard, attempts:)
+}
+
+@internal
+pub fn with_pending(shard: Shard, pending: List(Command)) -> Shard {
+  Shard(..shard, pending:)
+}
+
+@internal
+pub fn with_inbound(shard: Shard, inbound: Inbound) -> Shard {
+  Shard(..shard, inbound:)
+}
+
 /// Advance the machine by one input. One that does not apply produces a single
 /// `Note(Ignored(_))`; the same pair always yields the same `Step`.
 pub fn step(shard: Shard, input: Input) -> Step {
@@ -1125,7 +1200,7 @@ fn restamp(stamps: Stamps, timer: Timer, stamp: Stamp) -> Stamps {
 /// two places that build one from host data measure it here first, and the
 /// byte count comes back so the caller can say how big it was.
 fn measured(payload: Outbound) -> Result(Outbound, Int) {
-  let size = string.byte_size(payload.text)
+  let size = string.byte_size(frame.outbound_text(payload))
   case size > max_command_bytes {
     True -> Error(size)
     False -> Ok(payload)
@@ -1233,11 +1308,16 @@ fn retreat(
 /// cancelled, the identify slot goes back and the inflater is dropped.
 fn halt(
   shard: Shard,
-  phase phase: Phase,
   transport transport: Transport,
   reason reason: Halt,
   note notices: List(Notice),
 ) -> Step {
+  let phase = case reason {
+    Fatal(reason:, ..) -> Dead(reason)
+    Requested -> Stopped
+    IdentifyTooLarge(bytes:) -> Unusable(bytes)
+    NoProgress(attempts:) -> Exhausted(attempts)
+  }
   enter(
     shard,
     Move(
@@ -1268,13 +1348,7 @@ fn no_progress(
     Shut(_) -> Shut(close.Terminal)
     Hold(_) | Dial(_) | Abandon -> transport
   }
-  halt(
-    shard,
-    phase: Exhausted(shard.attempts),
-    transport:,
-    reason: NoProgress(shard.attempts),
-    note: notices,
-  )
+  halt(shard, transport:, reason: NoProgress(shard.attempts), note: notices)
 }
 
 /// What the next connection should do, given where this one died. A phase that
@@ -1516,7 +1590,6 @@ fn on_closed(shard: Shard, code: Option(Int)) -> Step {
 fn die(shard: Shard, reason: close.Reason) -> Step {
   halt(
     shard,
-    phase: Dead(reason),
     transport: Abandon,
     reason: Fatal(reason, shard.config.sharding),
     note: [],
@@ -1526,7 +1599,6 @@ fn die(shard: Shard, reason: close.Reason) -> Step {
 fn on_stop(shard: Shard) -> Step {
   halt(
     shard,
-    phase: Stopped,
     transport: tear_down(shard.phase, close.Terminal),
     reason: Requested,
     note: [],
@@ -1580,11 +1652,7 @@ fn beat_now(
   intent: Intent,
   rebuild: fn(Beat) -> Phase,
 ) -> Step {
-  // Clamped here and not only in `normalise`: `Shard` is a public record, so a
-  // config can reach the machine without passing through `new`. A limit of 0
-  // makes the first beat a zombie and the shard never connects.
-  let limit = int.max(1, shard.config.tuning.missed_ack_limit)
-  case beat.unacked >= limit {
+  case beat.unacked >= shard.config.tuning.missed_ack_limit {
     True ->
       retreat(
         shard,
@@ -2018,9 +2086,7 @@ fn on_command(shard: Shard, wanted: Command) -> Step {
 }
 
 fn queue(shard: Shard, wanted: Command) -> Step {
-  // Same reason as `beat_now`: a hand-built `Shard` skips `normalise`, and a
-  // negative depth would grow the backlog forever instead of capping it.
-  let limit = int.max(0, shard.config.tuning.command_queue_max)
+  let limit = shard.config.tuning.command_queue_max
   let depth = list.length(shard.pending)
   case limit {
     0 -> Step(shard, [Note(CommandDropped(0))])
@@ -2103,13 +2169,10 @@ fn on_slot(shard: Shard) -> Step {
 /// not a connection that went wrong.
 fn identify(config: Config) -> Result(Outbound, Int) {
   measured(
-    frame.identify(frame.Identity(
+    identify.identify(identify.Identity(
       token: config.token,
       intents: config.intents,
       properties: config.properties,
-      // IDENTIFY's own `compress` asks for per-payload zlib, which glyde does
-      // not support and Discord will not do alongside transport compression.
-      compress: False,
       large_threshold: config.large_threshold,
       shard: config.sharding,
       presence: config.presence,
@@ -2122,7 +2185,6 @@ fn identify(config: Config) -> Result(Outbound, Int) {
 fn unusable(shard: Shard, bytes: Int) -> Step {
   halt(
     shard,
-    phase: Unusable(bytes),
     transport: tear_down(shard.phase, close.Terminal),
     reason: IdentifyTooLarge(bytes),
     note: [],
@@ -2229,11 +2291,11 @@ fn chain(step: Step) -> Step {
   let shard = Shard(..shard, inbound: Inbound(..shard.inbound, pending: rest))
   let Step(shard:, outputs: more) = feed(shard, payload)
   // Host events stay last, so a re-entrant handler runs after every effect.
-  let #(effects, events) =
-    list.split_while(outputs, fn(output) {
+  let #(events, effects) =
+    list.partition(outputs, fn(output) {
       case output {
-        Emit(_) -> False
-        _ -> True
+        Emit(_) -> True
+        _ -> False
       }
     })
   Step(shard, list.flatten([effects, more, events]))

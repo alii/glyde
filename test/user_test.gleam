@@ -159,25 +159,25 @@ pub fn premium_type_round_trips_test() {
     #(1, user.NitroClassic),
     #(2, user.Nitro),
     #(3, user.NitroBasic),
-    #(4, user.UnknownPremiumType(4)),
-    #(99, user.UnknownPremiumType(99)),
   ]
   list.each(table, fn(row) {
     let #(wire, variant) = row
-    assert user.premium_type_from_int(wire) == variant
+    assert user.premium_type_from_int(wire) == Some(variant)
     assert user.premium_type_to_int(variant) == wire
     assert json.to_string(user.premium_type_to_json(variant)) == int_text(wire)
   })
+  assert user.premium_type_from_int(4) == None
+  assert user.premium_type_from_int(99) == None
 }
 
 fn int_text(value: Int) -> String {
   json.to_string(json.int(value))
 }
 
-/// An unknown value has to decode and echo back unchanged.
-pub fn an_unknown_premium_type_decodes_test() {
+/// A value this build has no name for decodes as `None` rather than failing.
+pub fn an_unmodelled_premium_type_tolerated_test() {
   let assert Ok(me) = parse_me("{\"id\":\"1\",\"premium_type\":7}")
-  assert me.premium_type == Some(user.UnknownPremiumType(7))
+  assert me.premium_type == None
 }
 
 /// The JSON key is `avatar_decoration_data`, which is not what the field is

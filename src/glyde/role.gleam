@@ -116,7 +116,7 @@ pub fn decoder() -> Decoder(Role) {
   use managed <- wire.flag_field("managed", False)
   use mentionable <- wire.flag_field("mentionable", False)
   use tags <- wire.opt_field("tags", role_tags_decoder())
-  use flag_bits <- wire.int_field("flags", 0)
+  use flags <- wire.enum_field("flags", flags.from_int)
   decode.success(Role(
     id:,
     name:,
@@ -129,7 +129,7 @@ pub fn decoder() -> Decoder(Role) {
     managed:,
     mentionable:,
     tags:,
-    flags: flags.from_int(flag_bits),
+    flags:,
   ))
 }
 
@@ -208,7 +208,7 @@ pub fn role_tags_to_json(tags: RoleTags) -> Json {
 
 /// Discord takes the role's colour two ways and reads only one of them, so
 /// stating it twice is a body that contradicts itself. One value, one key.
-pub type RoleColor {
+pub type RoleColorField {
   /// The deprecated `color` integer, and still the only colour a guild
   /// without ENHANCED_ROLE_COLORS can set.
   LegacyColor(Int)
@@ -234,7 +234,7 @@ pub type CreateRole {
     /// Max 100 characters.
     name: Option(String),
     permissions: Option(Permissions),
-    color: Option(RoleColor),
+    color: Option(RoleColorField),
     /// Show the role's members in their own section of the member list.
     hoist: Option(Bool),
     badge: Option(RoleBadge),
@@ -270,7 +270,7 @@ pub type EditRole {
   EditRole(
     name: Option(String),
     permissions: Option(Permissions),
-    color: Option(RoleColor),
+    color: Option(RoleColorField),
     hoist: Option(Bool),
     /// `Null` leaves the role with no icon and no emoji.
     badge: Field(RoleBadge),
@@ -309,7 +309,7 @@ pub fn edit_role_body(payload: EditRole) -> Body {
 fn role_fields(
   name name: Option(String),
   perms perms: Option(Permissions),
-  color color: Option(RoleColor),
+  color color: Option(RoleColorField),
   hoist hoist: Option(Bool),
   badge badge: List(#(String, Field(Json))),
   mentionable mentionable: Option(Bool),
@@ -330,7 +330,7 @@ fn role_fields(
 
 /// `color` and `colors`, of which exactly one is ever written. Neither takes
 /// a null: Discord has no way to say "this role has no colour".
-fn color_keys(value: Option(RoleColor)) -> List(#(String, Field(Json))) {
+fn color_keys(value: Option(RoleColorField)) -> List(#(String, Field(Json))) {
   case value {
     None -> []
     Some(LegacyColor(rgb)) -> [#("color", Present(json.int(rgb)))]

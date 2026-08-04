@@ -187,6 +187,14 @@ pub fn parse(text: String) -> Result(Id(kind), Nil) {
   }
 }
 
+/// True when text looks like a snowflake: 17 to 19 ASCII digits. A heuristic
+/// for parsing untyped paths, not a validity guarantee.
+pub fn plausible(text: String) -> Bool {
+  let bytes = <<text:utf8>>
+  let size = bit_array.byte_size(bytes)
+  size >= 17 && size <= 19 && all_digits(bytes)
+}
+
 /// 2^64 - 1 is 20 digits; anything longer is not a snowflake.
 const max_digits: Int = 20
 

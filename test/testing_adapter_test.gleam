@@ -85,7 +85,7 @@ fn current_stamp(
   bot: client.Bot(adapter.World),
   timer: gateway.Timer,
 ) -> gateway.Stamp {
-  let stamps = client.shard(bot).stamps
+  let stamps = gateway.stamps(client.shard(bot))
   case timer {
     gateway.Heartbeat -> stamps.heartbeat
     gateway.Handshake -> stamps.handshake
@@ -117,17 +117,13 @@ pub fn mis_ordered_beat_is_unplayable_test() {
   let report = adapter.run(mis_ordered, adapter.over_client())
 
   assert report.verdict
-    == adapter.Unplayable(
-      at: 0,
-      beat: adapter.Connects,
-      trace: [
-        adapter.Disarmed(gateway.Heartbeat),
-        adapter.Disarmed(gateway.Handshake),
-        adapter.Disarmed(gateway.Commands),
-        adapter.Armed(gateway.Reconnect, 0),
-      ],
-      wanted: lost_arm.expect,
-    )
+    == adapter.Unplayable(at: 0, beat: adapter.Connects, trace: [
+      adapter.Disarmed(gateway.Heartbeat),
+      adapter.Disarmed(gateway.Handshake),
+      adapter.Disarmed(gateway.Commands),
+      adapter.Armed(gateway.Reconnect, 0),
+    ])
+  assert report.scenario.expect == lost_arm.expect
 
   // The dial the trace stops short of is in the report, not left to be guessed.
   assert string.contains(adapter.describe(report), "  wanted 4: Dialled(")
@@ -148,11 +144,11 @@ pub fn silent_transport_is_not_the_script_s_fault_test() {
   let report = adapter.run(scenario("self-close echo"), deaf)
   let text = adapter.describe(report)
 
-  let assert adapter.Unplayable(at:, beat:, trace:, wanted:) = report.verdict
+  let assert adapter.Unplayable(at:, beat:, trace:) = report.verdict
   assert at == 1
   assert beat == adapter.Connects
   assert trace == []
-  assert wanted == scenario("self-close echo").expect
+  assert report.scenario.expect == scenario("self-close echo").expect
   // The zero-delay arm and the dial it never made, which is the whole finding.
   assert string.contains(text, "  wanted 3: Armed(Reconnect, 0)")
   assert string.contains(text, "  wanted 4: Dialled(")
@@ -165,7 +161,7 @@ pub fn traces_carry_no_token_test() {
     adapter.recorder().send(
       adapter.blank(),
       frame.outbound(
-        frame.OpIdentify,
+        frame.SendIdentify,
         json.object([#("token", json.string("x"))]),
       ),
     )
@@ -174,13 +170,13 @@ pub fn traces_carry_no_token_test() {
 }
 
 /// The act is named by the opcode the frame was built with, never by reading
-/// the text back, so a body the recorder cannot parse is not a thing that can
-/// happen.
+/// the text back: `Outbound` is opaque, so a body that disagrees with its
+/// opcode cannot be built.
 pub fn acts_are_named_by_the_frames_own_opcode_test() {
   let world =
     adapter.recorder().send(
       adapter.blank(),
-      frame.Outbound(op: frame.OpVoiceStateUpdate, text: "not json"),
+      frame.outbound(frame.SendVoiceStateUpdate, json.null()),
     )
 
   assert adapter.acts(world) == [adapter.Wrote(adapter.SentOther(4))]

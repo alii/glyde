@@ -5,9 +5,9 @@
 
 import gleam/json.{type Json}
 import gleam/list
-import gleam/option.{type Option, None}
+import gleam/option.{type Option}
 import gleam/string
-import glyde/field.{Absent, Present}
+import glyde/field.{Present}
 import glyde/gateway/frame
 import glyde/gateway/presence.{type Presence}
 import glyde/id.{type Id}
@@ -29,31 +29,30 @@ pub type Command {
 
   /// op 8. Answers arrive as GUILD_MEMBERS_CHUNK dispatches of up to 1000
   /// members each, handed over as they come rather than reassembled.
-  RequestGuildMembers(request: MemberRequest)
+  ///
+  /// The `nonce` comes back on every chunk and is what matches an answer to the
+  /// request that asked for it. The chunk carries it as a plain string, so
+  /// compare with `nonce_to_string`.
+  RequestGuildMembers(
+    guild: Id(id.Guild),
+    nonce: Option(Nonce),
+    select: MemberSelector,
+  )
 }
 
 /// Which members to ask for. Discord takes a name prefix, a list of ids, or
 /// the whole list, and each of the three is a different set of keys.
-///
-/// Every variant takes a `nonce`, which comes back on every chunk and is what
-/// matches an answer to the request for it. The chunk carries it as a plain
-/// string, so compare with `nonce_to_string`.
-pub type MemberRequest {
+pub type MemberSelector {
   /// Every member of the guild. This is the one Discord requires the
   /// GUILD_MEMBERS intent for, and that intent is privileged: an app has to be
   /// approved for it before the answer arrives.
-  AllMembers(guild: Id(id.Guild), nonce: Option(Nonce))
+  All
 
   /// Members whose name starts with `prefix`, at most `limit` of them.
-  ByPrefix(
-    guild: Id(id.Guild),
-    prefix: String,
-    limit: Limit,
-    nonce: Option(Nonce),
-  )
+  ByPrefix(prefix: String, limit: Limit)
 
   /// Specific members, by id, built with `user_ids`.
-  ByIds(guild: Id(id.Guild), users: UserIds, nonce: Option(Nonce))
+  ByIds(users: UserIds)
 }
 
 /// Discord's cap on the ids one request may name.
@@ -63,7 +62,7 @@ const max_user_ids: Int = 100
 const max_nonce_bytes: Int = 32
 
 /// Discord's floor on a prefix search: a 0 limit there is the "every member"
-/// spelling, which is `AllMembers`.
+/// spelling, which is `All`.
 const min_limit: Int = 1
 
 /// Discord's cap on a prefix search: "requesting a prefix will return a
@@ -90,7 +89,7 @@ pub type UserIdsError {
 /// an error: a 0 asks for something else, and a 500 is answered with 100.
 pub type LimitError {
   /// Under `min_limit`. A search that may match nothing is not a search, and
-  /// the 0 that asks for every member is `AllMembers`.
+  /// the 0 that asks for every member is `All`.
   LimitTooSmall(value: Int)
   /// Over `max_limit`. Discord stops at 100 matches, so the rest of the
   /// number is members the host would wait for and never be sent.
@@ -158,11 +157,11 @@ pub fn limit(value: Int) -> Result(Limit, LimitError) {
 pub fn encode(command: Command) -> frame.Outbound {
   case command {
     UpdatePresence(presence: shown) ->
-      frame.outbound(frame.OpPresenceUpdate, presence.to_json(shown))
+      frame.outbound(frame.SendPresenceUpdate, presence.to_json(shown))
 
     UpdateVoiceState(guild:, channel:, self_mute:, self_deaf:) ->
       frame.outbound(
-        frame.OpVoiceStateUpdate,
+        frame.SendVoiceStateUpdate,
         json.object([
           #("guild_id", id.to_json(guild)),
           // A literal null disconnects. Omitting the key means "no change".
@@ -172,46 +171,50 @@ pub fn encode(command: Command) -> frame.Outbound {
         ]),
       )
 
-    RequestGuildMembers(request:) ->
-      frame.outbound(frame.OpRequestGuildMembers, request_to_json(request))
+    RequestGuildMembers(guild:, nonce:, select:) ->
+      frame.outbound(
+        frame.SendRequestGuildMembers,
+        request_to_json(guild, nonce, select),
+      )
   }
 }
 
-fn request_to_json(request: MemberRequest) -> Json {
-  case request {
+fn request_to_json(
+  guild: Id(id.Guild),
+  nonce: Option(Nonce),
+  select: MemberSelector,
+) -> Json {
+  let by = case select {
     // An empty query with a limit of 0 is how Discord spells "all of them".
-    AllMembers(guild:, nonce:) ->
-      wire.object([
-        #("guild_id", Present(id.to_json(guild))),
-        #("query", Present(json.string(""))),
-        #("limit", Present(json.int(0))),
-        #("nonce", nonce_field(nonce)),
-      ])
+    All -> [
+      #("query", Present(json.string(""))),
+      #("limit", Present(json.int(0))),
+    ]
 
-    ByPrefix(guild:, prefix:, limit: Limit(limit), nonce:) ->
-      wire.object([
-        #("guild_id", Present(id.to_json(guild))),
-        #("query", Present(json.string(prefix))),
-        #("limit", Present(json.int(limit))),
-        #("nonce", nonce_field(nonce)),
-      ])
+    ByPrefix(prefix:, limit: Limit(limit)) -> [
+      #("query", Present(json.string(prefix))),
+      #("limit", Present(json.int(limit))),
+    ]
 
-    ByIds(guild:, users: UserIds(users), nonce:) ->
-      wire.object([
-        #("guild_id", Present(id.to_json(guild))),
-        // Always an array. Discord also accepts a bare snowflake.
-        #("user_ids", Present(json.array(users, id.to_json))),
-        // Discord documents `limit` only with `query`; 0 means no limit.
-        #("limit", Present(json.int(0))),
-        #("nonce", nonce_field(nonce)),
-      ])
+    ByIds(users: UserIds(users)) -> [
+      // Always an array. Discord also accepts a bare snowflake.
+      #("user_ids", Present(json.array(users, id.to_json))),
+      // Discord documents `limit` only with `query`; 0 means no limit.
+      #("limit", Present(json.int(0))),
+    ]
   }
-}
-
-/// Discord answers a null nonce with close 4002, so an unset one is omitted.
-fn nonce_field(nonce: Option(Nonce)) -> field.Field(Json) {
-  case nonce {
-    None -> Absent
-    option.Some(Nonce(text)) -> Present(json.string(text))
-  }
+  wire.object(
+    list.flatten([
+      [#("guild_id", Present(id.to_json(guild)))],
+      by,
+      [
+        // Discord answers a null nonce with close 4002, so an unset one is
+        // omitted.
+        #(
+          "nonce",
+          wire.put(wire.opt(nonce), fn(n) { json.string(nonce_to_string(n)) }),
+        ),
+      ],
+    ]),
+  )
 }

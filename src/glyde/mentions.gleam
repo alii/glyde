@@ -96,21 +96,6 @@ pub fn ping_reply(mentions: AllowedMentions, enabled: Bool) -> AllowedMentions {
   AllowedMentions(..mentions, replied_user: enabled)
 }
 
-/// The `allowed_mentions` entry for an edit, written only when the edit
-/// touches `content` or `components`, which are what Discord re-parses
-/// mentions from. Sending it otherwise breaks suppressing embeds on somebody
-/// else's message, which Discord refuses it on.
-pub fn mention_policy(
-  mentions: AllowedMentions,
-  content content: Field(a),
-  components components: Field(b),
-) -> Field(Json) {
-  case field.is_absent(content) && field.is_absent(components) {
-    True -> Absent
-    False -> Present(to_json(mentions))
-  }
-}
-
 pub fn to_json(mentions: AllowedMentions) -> Json {
   wire.object([
     // Always written: an empty array suppresses everything, so omitting the

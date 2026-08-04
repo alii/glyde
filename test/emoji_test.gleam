@@ -14,33 +14,54 @@ fn parse_guild(text: String) -> Result(emoji.GuildEmoji, json.DecodeError) {
 
 pub fn decodes_a_unicode_partial_test() {
   let assert Ok(fire) = parse("{\"id\":null,\"name\":\"\u{1F525}\"}")
-  assert fire.kind == emoji.Unicode("\u{1F525}")
-  assert fire.animated == False
+  assert fire == emoji.Unicode("\u{1F525}")
 }
 
 pub fn decodes_a_custom_partial_test() {
   let assert Ok(custom) =
     parse("{\"id\":\"41771983429993937\",\"name\":\"LUL\",\"animated\":true}")
-  let assert emoji.Custom(id: emoji_id, name:) = custom.kind
+  let assert emoji.Custom(id: emoji_id, name:, animated:) = custom
   assert id.to_string(emoji_id) == "41771983429993937"
   assert name == Some("LUL")
-  assert custom.animated == True
+  assert animated == True
 }
 
-/// The guild fields sit beside the partial's, so one payload fills both.
+/// A guild's own emoji is always custom and always named, so id and name
+/// land as plain values, not wrapped in the partial's Option and sum.
 pub fn decodes_a_full_guild_emoji_test() {
   let assert Ok(full) =
     parse_guild(
       "{\"id\":\"41771983429993937\",\"name\":\"LUL\",\"roles\":[\"41771983429993000\",\"41771983429993001\"],\"user\":{\"id\":\"1\",\"username\":\"Luigi\"},\"require_colons\":true,\"managed\":false,\"animated\":false,\"available\":true}",
     )
-  assert full.emoji.kind
-    == emoji.Custom(id: id.from_string("41771983429993937"), name: Some("LUL"))
+  assert id.to_string(full.id) == "41771983429993937"
+  assert full.name == "LUL"
+  assert full.animated == False
   assert list.map(full.roles, id.to_string)
     == ["41771983429993000", "41771983429993001"]
   let assert Some(uploader) = full.uploader
   assert uploader.username == "Luigi"
   assert full.require_colons == True
   assert full.managed == False
+}
+
+/// The partial shape a guild emoji lowers to for reactions and buttons.
+pub fn as_partial_is_custom_with_the_name_test() {
+  let assert Ok(full) =
+    parse_guild("{\"id\":\"41771983429993937\",\"name\":\"LUL\"}")
+  assert emoji.as_partial(full)
+    == emoji.Custom(
+      id: id.from_string("41771983429993937"),
+      name: Some("LUL"),
+      animated: False,
+    )
+}
+
+/// A guild's own list never carries a unicode entry or one whose name has
+/// been lost, so those payloads fail rather than decoding into an odd shape.
+pub fn a_guild_emoji_requires_id_and_name_test() {
+  let assert Error(_) = parse_guild("{\"id\":null,\"name\":\"x\"}")
+  let assert Error(_) = parse_guild("{\"id\":\"1\",\"name\":null}")
+  let assert Error(_) = parse_guild("{\"id\":\"1\"}")
 }
 
 /// An emoji goes unavailable only when the guild loses the boosts for it.
@@ -58,15 +79,19 @@ pub fn available_defaults_to_true_test() {
 /// nullable on `Custom`.
 pub fn a_null_name_decodes_test() {
   let assert Ok(gone) = parse("{\"id\":\"41771983429993937\",\"name\":null}")
-  assert gone.kind
-    == emoji.Custom(id: id.from_string("41771983429993937"), name: None)
+  assert gone
+    == emoji.Custom(
+      id: id.from_string("41771983429993937"),
+      name: None,
+      animated: False,
+    )
 }
 
 /// Neither an id nor a name is not a shape Discord sends. Reading it as an
 /// empty unicode emoji keeps the payload it rode in on.
 pub fn neither_an_id_nor_a_name_reads_as_unicode_test() {
   let assert Ok(nothing) = parse("{\"id\":null,\"name\":null}")
-  assert nothing.kind == emoji.Unicode("")
+  assert nothing == emoji.Unicode("")
 }
 
 pub fn a_null_roles_array_is_empty_test() {
@@ -86,13 +111,13 @@ pub fn a_partial_decode_drops_the_guild_fields_test() {
 }
 
 pub fn constructors_build_the_send_side_partial_test() {
-  let fire = emoji.unicode("\u{1F525}")
-  assert fire.kind == emoji.Unicode("\u{1F525}")
+  assert emoji.unicode("\u{1F525}") == emoji.Unicode("\u{1F525}")
 
-  let lul = emoji.custom(id.from_string("41771983429993937"), "LUL")
-  assert lul.kind
-    == emoji.Custom(id: id.from_string("41771983429993937"), name: Some("LUL"))
-  assert lul.animated == False
+  let emoji_id = id.from_string("41771983429993937")
+  assert emoji.custom(emoji_id, "LUL")
+    == emoji.Custom(id: emoji_id, name: Some("LUL"), animated: False)
+  assert emoji.animated_custom(emoji_id, "LUL")
+    == emoji.Custom(id: emoji_id, name: Some("LUL"), animated: True)
 }
 
 /// A null id is how Discord tells a standard emoji from a custom one.
@@ -102,10 +127,10 @@ pub fn to_json_writes_a_null_id_for_unicode_test() {
 }
 
 pub fn to_json_omits_animated_when_false_test() {
-  let lul = emoji.custom(id.from_string("123"), "LUL")
-  assert json.to_string(emoji.to_json(lul))
+  let emoji_id = id.from_string("123")
+  assert json.to_string(emoji.to_json(emoji.custom(emoji_id, "LUL")))
     == "{\"id\":\"123\",\"name\":\"LUL\"}"
-  assert json.to_string(emoji.to_json(emoji.Emoji(..lul, animated: True)))
+  assert json.to_string(emoji.to_json(emoji.animated_custom(emoji_id, "LUL")))
     == "{\"id\":\"123\",\"name\":\"LUL\",\"animated\":true}"
 }
 

@@ -16,8 +16,7 @@ import glyde/rest/headers
 import glyde/rest/limiter.{type Limiter, type Ticket}
 import glyde/rest/route.{type Route}
 import glyde/status.{
-  type CallFailure, type Status, Connecting, Halted, Note, Paced, Reconnecting,
-  Sent, Undecodable, Unreachable, Withheld, WouldBlock,
+  type Status, Connecting, Halted, Note, Paced, Reconnecting, Sent, Undecodable,
 }
 import glyde/transport.{type Transport}
 
@@ -32,10 +31,16 @@ pub type Step(state) {
   )
 }
 
-/// Never `Refused`: reading the body is the continuation's job, because only
-/// it holds the decoder.
+/// Why the runtime could not get a response back. Reading the body is the
+/// continuation's job, so `glyde.Refused` is not representable here.
+pub type SendFailure {
+  Unreachable(transport.Unreachable)
+  WouldBlock(wait_ms: Int)
+  Withheld(limiter.Refusal)
+}
+
 pub type Answer =
-  Result(Response(BitArray), CallFailure)
+  Result(Response(BitArray), SendFailure)
 
 /// Run `step` to its state, then start `next` from there. How two listeners on
 /// one event are chained without the second seeing a stale state.
@@ -131,16 +136,19 @@ type Dial {
     socket: transport.Socket,
     /// Whether this socket ever came up. A failed dial is `OpenFailed`, a
     /// dead connection is `Closed`, and the shard treats them differently.
-    opened: Bool,
+    phase: DialPhase,
     /// Set when a write came back `False`. The socket is gone already, so the
     /// loop reports the close itself rather than waiting a whole read timeout
     /// for the read side to find out.
     dead: Bool,
-    /// The last `Failed` or `Refused`, because the reason arrives one event
-    /// before the end that needs it. `None` until the socket says something
-    /// went wrong: a close carrying its own reason is the usual ending.
-    trouble: Option(gateway.DialFailure),
   )
+}
+
+/// Whether this socket ever came up. The transport carries any dial failure on
+/// the `Closed` itself, so nothing is held here between events.
+type DialPhase {
+  Dialing
+  Live
 }
 
 fn io(run: Runtime(state)) -> Io {
@@ -209,7 +217,7 @@ fn once(run: Runtime(state), within: Int) -> Runtime(state) {
 
 /// How long this turn may block: the nearest deadline, or the floor.
 fn waiting(run: Runtime(state), now: Io) -> Int {
-  case soonest(now.deadlines) {
+  case gateway.soonest(now.deadlines) {
     Some(at) -> int.max(0, at - run.transport.now())
     None -> nothing_due
   }
@@ -235,7 +243,8 @@ fn resume(run: Runtime(state), step: Step(state)) -> Runtime(state) {
   case step {
     Done(user) -> Runtime(..run, user:)
     Perform(request:, route:, resume: then) -> {
-      let #(run, answer) = perform(run, request, route, 1)
+      let give_up_at = run.transport.now() + longest_wait
+      let #(run, answer) = perform(run, request, route, 1, give_up_at)
       resume(run, then(answer))
     }
   }
@@ -259,6 +268,7 @@ fn perform(
   request: Request(BitArray),
   route: Route,
   attempt: Int,
+  give_up_at: Int,
 ) -> #(Runtime(state), Answer) {
   let #(run, ticket) = mint(run)
   let input = case attempt {
@@ -266,7 +276,6 @@ fn perform(
     // The front of the queue, so a retry is not reordered behind newer work.
     _ -> limiter.Retry(ticket:, route:)
   }
-  let give_up_at = run.transport.now() + longest_wait
   let #(run, verdict) = limit(run, input, ticket)
 
   case admit(run, ticket, verdict, give_up_at) {
@@ -287,11 +296,9 @@ fn perform(
               headers: got.headers,
               body: throttle_body(got),
             )
-          let settled =
-            limiter.Settled(ticket, headers.to_limiter_outcome(outcome))
-          let #(run, _) = limit(run, settled, ticket)
+          let #(run, _) = limit(run, limiter.Settled(ticket, outcome), ticket)
           case got.status == 429 && attempt < max_attempts {
-            True -> perform(run, request, route, attempt + 1)
+            True -> perform(run, request, route, attempt + 1, give_up_at)
             False -> #(run, Ok(got))
           }
         }
@@ -352,7 +359,7 @@ fn admit(
   ticket: Ticket,
   verdict: Verdict,
   give_up_at: Int,
-) -> #(Runtime(state), Result(Nil, CallFailure)) {
+) -> #(Runtime(state), Result(Nil, SendFailure)) {
   case verdict {
     Go -> #(run, Ok(Nil))
     No(why) -> #(run, Error(Withheld(why)))
@@ -377,14 +384,24 @@ fn admit(
 
 // -- Socket ------------------------------------------------------------------
 
-/// A write came back `False`. `glyde/client` says that comes back as a close,
-/// and the `Drop` the shard answers with is what abandons the socket.
+/// A write came back `False`. Report it the same way a socket close would be:
+/// `open_failed` if the dial never came up, `closed` if it did. The `Drop` the
+/// shard answers with is what abandons the socket.
 fn gave_up(run: Runtime(state)) -> Runtime(state) {
   case io(run).dial {
     None -> run
-    Some(dial) ->
-      on_socket(run, fn(dial) { Dial(..dial, dead: False) })
-      |> drive(client.closed(_, dial.conn, None))
+    Some(dial) -> {
+      let run = on_socket(run, fn(dial) { Dial(..dial, dead: False) })
+      case dial.phase {
+        Dialing ->
+          drive(run, client.open_failed(
+            _,
+            dial.conn,
+            gateway.Unreachable(detail: "write failed"),
+          ))
+        Live -> drive(run, client.closed(_, dial.conn, None))
+      }
+    }
   }
 }
 
@@ -418,7 +435,7 @@ fn from_socket(
 ) -> Runtime(state) {
   case event {
     transport.Opened ->
-      on_socket(run, fn(dial) { Dial(..dial, opened: True) })
+      on_socket(run, fn(dial) { Dial(..dial, phase: Live) })
       |> drive(client.opened(_, dial.conn))
 
     transport.TextMessage(text:) ->
@@ -427,34 +444,32 @@ fn from_socket(
     transport.BinaryMessage(bytes:) ->
       drive(run, client.received_bytes(_, dial.conn, bytes))
 
-    // Advisory, and never the end. Held for the close that follows, which is
-    // the one the shard acts on and the one that needs the words.
-    transport.Failed(reason:) ->
-      on_socket(run, fn(dial) {
-        Dial(..dial, trouble: Some(gateway.Unreachable(detail: reason)))
-      })
-
-    // Held the same way, and the status is why: a 401 upgrade halts the shard
-    // where a bare reason would have it redial until the token is reset.
-    transport.Refused(status:, reason:) ->
-      on_socket(run, fn(dial) {
-        Dial(..dial, trouble: Some(gateway.Refused(status:, detail: reason)))
-      })
-
-    transport.Closed(code:, reason:) -> {
+    transport.Closed(code:, reason:, cause:) -> {
       let run = on_io(run, fn(io) { Io(..io, dial: None) })
-      case dial.opened {
-        // The `Failed` said more than the close will, so it wins when there
-        // was one. Otherwise the close's own words are all there is.
-        False ->
+      case dial.phase {
+        Dialing ->
           drive(run, client.open_failed(
             _,
             dial.conn,
-            option.unwrap(dial.trouble, gateway.Unreachable(detail: reason)),
+            dial_failure(cause, reason),
           ))
-        True -> drive(run, client.closed(_, dial.conn, peer_code(code)))
+        Live -> drive(run, client.closed(_, dial.conn, peer_code(code)))
       }
     }
+  }
+}
+
+/// The transport's cause as the shard's `DialFailure`. A cause with no words is
+/// still a dial that never opened, so the close's own reason stands in.
+fn dial_failure(
+  cause: Option(transport.CloseCause),
+  reason: String,
+) -> gateway.DialFailure {
+  case cause {
+    Some(transport.TransportFailed(detail:)) -> gateway.Unreachable(detail:)
+    Some(transport.UpgradeRefused(status:, detail:)) ->
+      gateway.Refused(status:, detail:)
+    None -> gateway.Unreachable(detail: reason)
   }
 }
 
@@ -473,15 +488,6 @@ fn fire_due(run: Runtime(state)) -> Runtime(state) {
       })
       |> drive(client.timer_fired(_, timer, stamp))
   }
-}
-
-fn soonest(deadlines: List(gateway.Deadline)) -> Option(Int) {
-  list.fold(deadlines, None, fn(best, deadline) {
-    case best {
-      Some(at) if at <= deadline.at -> best
-      _ -> Some(deadline.at)
-    }
-  })
 }
 
 /// RFC 6455 forbids 1005 and 1006 on the wire, so those two mean the socket
@@ -503,15 +509,15 @@ fn wiring(
 ) -> client.Transport(Io) {
   client.Transport(
     open: fn(io, conn, host, path) {
+      let host = gateway.host_to_string(host)
       report(Connecting(host))
       Io(
         ..io,
         dial: Some(Dial(
           conn:,
           socket: transport.open("wss://" <> host <> path),
-          opened: False,
+          phase: Dialing,
           dead: False,
-          trouble: None,
         )),
       )
     },
@@ -519,11 +525,11 @@ fn wiring(
       case io.dial {
         None -> io
         Some(dial) ->
-          case dial.socket.send(payload.text) {
+          case dial.socket.send(frame.outbound_text(payload)) {
             // Told after the write, not before: `glyde/client` promises a
             // failed write comes back as a close, never as a frame that went.
             True -> {
-              report(Sent(payload.op))
+              report(Sent(frame.outbound_op(payload)))
               io
             }
             // Never raise: the rest of the batch is usually the heartbeat

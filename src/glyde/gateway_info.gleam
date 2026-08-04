@@ -7,7 +7,7 @@
 import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import glyde/identify_queue.{type Queue} as queue
-import glyde/internal/url
+import glyde/internal/host
 import glyde/rest.{type Call}
 import glyde/rest/seg
 import glyde/wire
@@ -19,7 +19,7 @@ pub type GatewayInfo {
     url: String,
     /// The same URL with the scheme taken off, which is what a shard dials.
     /// Hand it to `gateway.Config.host`.
-    dial_host: url.Host,
+    dial_host: host.Host,
   )
 }
 
@@ -30,7 +30,7 @@ pub type GatewayBot {
     url: String,
     /// The same URL with the scheme taken off, which is what a shard dials.
     /// Hand it to `gateway.Config.host`.
-    dial_host: url.Host,
+    dial_host: host.Host,
     /// Discord's recommendation. Higher is allowed, lower closes with 4011.
     shards: Int,
     session_start_limit: SessionStartLimit,
@@ -76,21 +76,15 @@ pub fn bot_decoder() -> Decoder(GatewayBot) {
 
 /// The URL again, as the host a shard dials. A response with no host in it is
 /// broken rather than something to guess a default for, so it fails the decode
-/// and reaches the caller as `error.Malformed`.
-fn host_decoder() -> Decoder(url.Host) {
+/// and reaches the caller as `error.Malformed`. `decode.failure` wants a value
+/// of the right type and `decode.run` never returns it, so the front door
+/// stands in.
+fn host_decoder() -> Decoder(host.Host) {
   use address <- decode.then(decode.string)
-  case url.host_of(address) {
+  case host.host_of(address) {
     Ok(host) -> decode.success(host)
-    Error(Nil) -> decode.failure(discarded_host(), "GatewayUrl")
+    Error(Nil) -> decode.failure(host.discord_gateway, "GatewayUrl")
   }
-}
-
-/// `decode.failure` wants a value of the type it could not build, and a `Host`
-/// cannot be conjured. `decode.run` returns the errors and never this, and
-/// Discord's front door is what a shard would have dialled anyway.
-fn discarded_host() -> url.Host {
-  let assert Ok(host) = url.host_of("gateway.discord.gg")
-  host
 }
 
 pub fn session_start_limit_decoder() -> Decoder(SessionStartLimit) {

@@ -9,8 +9,7 @@
 //// let #(state, out) = limiter.step(state, now_ms: now, input: submit)
 //// // out is [Send(Ticket(1))]: send it, then hand the answer back.
 ////
-//// let outcome = headers.to_limiter_outcome(headers.outcome(status, hs, body))
-//// let answer = limiter.Settled(limiter.Ticket(1), outcome)
+//// let answer = limiter.Settled(limiter.Ticket(1), headers.outcome(status, hs, body))
 //// let #(state, out) = limiter.step(state, now_ms: later, input: answer)
 //// ```
 
@@ -53,11 +52,18 @@ pub type Outcome {
   Throttled(retry_after_ms: Int, scope: Scope, bucket: Option(String))
 
   /// 401 or 403.
-  Rejected(status: Int)
+  Rejected(why: RejectedWhy)
 
   /// Anything else, including transport failure. Frees the bucket and teaches
   /// the limiter nothing.
   Opaque
+}
+
+/// The two statuses Discord counts against the invalid-request budget. Named,
+/// so no other status can be counted against it.
+pub type RejectedWhy {
+  Unauthorized
+  Forbidden
 }
 
 /// What one response said about a bucket. `None` means the counter did not
@@ -114,7 +120,7 @@ pub type Notice {
   BucketLearned(route_key: String, bucket: String)
   GloballyFrozen(for_ms: Int)
   InvalidBudgetLow(remaining: Int)
-  SharedThrottle(bucket: String, for_ms: Int)
+  SharedThrottle(bucket: Option(String), for_ms: Int)
 }
 
 pub type Limits {
@@ -137,7 +143,7 @@ pub opaque type Limiter {
     /// Oldest first, keyed by route and re-resolved to a bucket on every pump,
     /// so learning a hash is a lookup and not a migration.
     pending: List(Pending),
-    inflight: Dict(Int, Inflight),
+    inflight: Dict(Ticket, Inflight),
     global: Global,
     invalid: Invalid,
   )
@@ -291,9 +297,8 @@ fn enqueue(
   on: Route,
   front: Bool,
 ) -> #(Limiter, List(Output)) {
-  let Ticket(id) = ticket
   case
-    dict.has_key(limiter.inflight, id)
+    dict.has_key(limiter.inflight, ticket)
     || list.any(limiter.pending, fn(entry) { entry.ticket == ticket }),
     list.length(limiter.pending) >= limiter.limits.max_pending
   {
@@ -316,14 +321,13 @@ fn settle(
   ticket: Ticket,
   outcome: Outcome,
 ) -> #(Limiter, List(Output)) {
-  let Ticket(id) = ticket
-  case dict.get(limiter.inflight, id) {
+  case dict.get(limiter.inflight, ticket) {
     // A ticket we never permitted, or one already settled: nothing to undo,
     // and crashing over it would lose every queued call.
     Error(_) -> #(limiter, [])
     Ok(entry) -> {
       let limiter =
-        Limiter(..limiter, inflight: dict.delete(limiter.inflight, id))
+        Limiter(..limiter, inflight: dict.delete(limiter.inflight, ticket))
         |> release(entry)
       case outcome {
         Learned(counters) -> learn(limiter, now_ms, entry, counters)
@@ -352,12 +356,11 @@ fn release(limiter: Limiter, entry: Inflight) -> Limiter {
 }
 
 fn abandon(limiter: Limiter, ticket: Ticket) -> Limiter {
-  let Ticket(id) = ticket
-  case dict.get(limiter.inflight, id) {
+  case dict.get(limiter.inflight, ticket) {
     Ok(entry) ->
       Limiter(
         ..limiter,
-        inflight: dict.delete(limiter.inflight, id),
+        inflight: dict.delete(limiter.inflight, ticket),
         global: case entry {
           Counted(..) -> refund(limiter.global)
           Unbounded -> limiter.global
@@ -410,7 +413,7 @@ fn settled_key(
   sent_under: String,
 ) -> String {
   case dict.get(limiter.hashes, route_key) {
-    Ok(hash) -> hash <> " " <> major_key
+    Ok(hash) -> route.compose_key(hash, major_key)
     Error(_) -> sent_under
   }
 }
@@ -495,10 +498,7 @@ fn throttle(
     )
 
     SharedScope -> #(park(limiter, now_ms, entry, retry_after_ms), [
-      Note(SharedThrottle(
-        bucket: option.unwrap(bucket, ""),
-        for_ms: retry_after_ms,
-      )),
+      Note(SharedThrottle(bucket:, for_ms: retry_after_ms)),
     ])
 
     UserScope -> #(user_throttle(limiter, now_ms, entry, retry_after_ms), [])
@@ -670,10 +670,12 @@ fn walk(
 /// a record of the slot so `Settled` and `Abandoned` can hand it back. The
 /// quota unit is not theirs to hand back, only Discord's next count is.
 fn commit(limiter: Limiter, now_ms: Int, entry: Pending) -> Limiter {
-  let Ticket(id) = entry.ticket
   case route.unbound(entry.route) {
     True ->
-      Limiter(..limiter, inflight: dict.insert(limiter.inflight, id, Unbounded))
+      Limiter(
+        ..limiter,
+        inflight: dict.insert(limiter.inflight, entry.ticket, Unbounded),
+      )
 
     False -> {
       let key = bucket_key(limiter, entry.route, now_ms)
@@ -691,7 +693,7 @@ fn commit(limiter: Limiter, now_ms: Int, entry: Pending) -> Limiter {
         global: spend_global(limiter.global, now_ms),
         inflight: dict.insert(
           limiter.inflight,
-          id,
+          entry.ticket,
           Counted(
             route_key: route.route_key(entry.route, now_ms),
             major_key: route.major_key(entry.route),
@@ -784,7 +786,7 @@ fn later(one: Readiness, other: Readiness) -> Readiness {
 /// response names a hash, `route.key` stands in.
 fn bucket_key(limiter: Limiter, on: Route, now_ms: Int) -> String {
   case dict.get(limiter.hashes, route.route_key(on, now_ms)) {
-    Ok(hash) -> hash <> " " <> route.major_key(on)
+    Ok(hash) -> route.compose_key(hash, route.major_key(on))
     Error(_) -> route.key(on, now_ms)
   }
 }

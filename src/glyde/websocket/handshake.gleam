@@ -145,7 +145,7 @@ pub type Response {
 /// The bytes of a head as they arrive, and the cap on them. `max_bytes` lives
 /// in here so it cannot drift between calls, and so that a server which never
 /// sends the blank line is this module's problem rather than every caller's.
-pub type Reader {
+pub opaque type Reader {
   Reader(buffer: BitArray, max_bytes: Int)
 }
 
@@ -167,7 +167,7 @@ pub type Next {
   /// The head is not finished. Read more bytes and `feed` them.
   Partial
 
-  Malformed(reason: Bad)
+  Malformed(reason: ParseError)
 
   /// `max_bytes` went by with no blank line ending the head. Our bound, not
   /// the RFC's.
@@ -176,14 +176,14 @@ pub type Next {
 
 /// Why the bytes are not a response head. Not a `Failure`: that one is a head
 /// that read fine and does not complete the handshake.
-pub type Bad {
+pub type ParseError {
   HeadNotText
   StatusNotHttp(line: String)
   HeaderWithoutColon(line: String)
 }
 
-pub fn malformed_to_string(bad: Bad) -> String {
-  case bad {
+pub fn parse_error_to_string(error: ParseError) -> String {
+  case error {
     HeadNotText -> "response head is not text"
     StatusNotHttp(line) -> "status line is not HTTP: " <> line
     HeaderWithoutColon(line) -> "header line has no colon: " <> line
@@ -233,7 +233,7 @@ fn lines_of(head: String, rest: BitArray) -> Next {
   }
 }
 
-fn status_of(line: String) -> Result(Int, Bad) {
+fn status_of(line: String) -> Result(Int, ParseError) {
   case string.split(line, " ") {
     [version, code, ..] ->
       case string.starts_with(version, "HTTP/"), int.parse(code) {
@@ -247,7 +247,7 @@ fn status_of(line: String) -> Result(Int, Bad) {
 fn headers_of(
   lines: List(String),
   acc: List(#(String, String)),
-) -> Result(List(#(String, String)), Bad) {
+) -> Result(List(#(String, String)), ParseError) {
   case lines {
     [] -> Ok(list.reverse(acc))
     [line, ..rest] ->

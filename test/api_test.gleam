@@ -450,7 +450,7 @@ fn thread_rows() -> List(Row) {
       "25 start thread",
       channel.start_thread(
         channel_id(),
-        channel.create_thread("t", channel.PublicThread),
+        channel.create_thread("t", channel.AsPublicThread),
       ),
       http.Post,
       channel_path() <> "/threads",
@@ -564,7 +564,7 @@ fn guild_rows() -> List(Row) {
     ),
     row(
       "36 create ban",
-      guild.ban(guild_id(), user_id(), member.create_ban()),
+      guild.ban(guild_id(), user_id(), guild.create_ban()),
       http.Put,
       guild_path() <> "/bans/" <> user_text,
       "/guilds/{guild.id}/bans/{id}",
@@ -912,7 +912,7 @@ fn interaction_rows() -> List(Row) {
   [
     row(
       "69 interaction callback",
-      interaction.callback(responder(), payload()),
+      interaction.callback(responder(), interaction.Pong),
       http.Post,
       "/interactions/"
         <> interaction_text
@@ -1095,9 +1095,9 @@ pub fn a_cursor_and_a_limit_travel_together_test() {
   assert query_of(call) == "?after=" <> message_text <> "&limit=100"
 }
 
-/// The route takes its own two-variant kind, so the only values that reach
+/// The route takes `ReactionType`, closed, so the only values that reach
 /// `type` are ones Discord accepts.
-pub fn a_reaction_kind_renders_as_its_number_test() {
+pub fn a_reaction_type_renders_as_its_number_test() {
   let reactions = fn(type_) {
     message.reactions_id(
       channel_id(),
@@ -1109,19 +1109,9 @@ pub fn a_reaction_kind_renders_as_its_number_test() {
     )
   }
 
-  assert query_of(reactions(Some(message.Normal))) == "?type=0"
-  assert query_of(reactions(Some(message.Burst))) == "?type=1"
+  assert query_of(reactions(Some(message.NormalReaction))) == "?type=0"
+  assert query_of(reactions(Some(message.BurstReaction))) == "?type=1"
   assert query_of(reactions(None)) == ""
-}
-
-/// A reaction type off an event narrows before it can be sent. A kind added
-/// after this build comes back as its number, which is a value to handle and
-/// not one to put on a query string.
-pub fn an_unknown_reaction_type_cannot_reach_the_query_test() {
-  assert message.reaction_kind(message.NormalReaction) == Ok(message.Normal)
-  assert message.reaction_kind(message.BurstReaction) == Ok(message.Burst)
-  assert message.reaction_kind(message.UnknownReactionType(7))
-    == Error(message.UnsendableReaction(wire_value: 7))
 }
 
 /// Zero is a value. A library that treats it as absence cannot express it.
@@ -1137,18 +1127,17 @@ pub fn an_id_cursor_emits_exactly_one_parameter_test() {
   let bans = fn(cursor) { guild.bans(guild_id(), cursor: cursor, limit: None) }
 
   assert query_of(bans(None)) == ""
-  assert query_of(bans(Some(guild.BansBefore(user_id()))))
+  assert query_of(bans(Some(query.Before(user_id()))))
     == "?before=" <> user_text
-  assert query_of(bans(Some(guild.BansAfter(user_id()))))
-    == "?after=" <> user_text
+  assert query_of(bans(Some(query.After(user_id())))) == "?after=" <> user_text
 
   let mine = fn(cursor) {
     guild.mine(cursor: cursor, limit: None, with_counts: False)
   }
 
-  assert query_of(mine(Some(guild.GuildsBefore(guild_id()))))
+  assert query_of(mine(Some(query.Before(guild_id()))))
     == "?before=" <> guild_text <> "&with_counts=false"
-  assert query_of(mine(Some(guild.GuildsAfter(guild_id()))))
+  assert query_of(mine(Some(query.After(guild_id()))))
     == "?after=" <> guild_text <> "&with_counts=false"
 }
 
@@ -1211,10 +1200,7 @@ pub fn a_wire_emoji_becomes_a_reaction_param_test() {
     #(emoji.unicode("🔥"), fire_encoded),
     #(emoji.unicode("🏳️‍⚧️"), "%F0%9F%8F%B3%EF%B8%8F%E2%80%8D%E2%9A%A7%EF%B8%8F"),
     #(emoji.custom(emoji_id, "rarity"), "rarity%3A123"),
-    #(
-      emoji.Emoji(kind: emoji.Custom(id: emoji_id, name: None), animated: False),
-      "e%3A123",
-    ),
+    #(emoji.Custom(id: emoji_id, name: None, animated: False), "e%3A123"),
   ]
 
   list.each(cases, fn(row) {
@@ -1305,7 +1291,7 @@ pub fn two_guilds_are_two_buckets_test() {
 /// is the half of the route a log or a metric label is likely to carry.
 pub fn tokens_stay_out_of_templates_test() {
   let followup = interaction.create_followup(responder(), payload())
-  let callback = interaction.callback(responder(), payload())
+  let callback = interaction.callback(responder(), interaction.Pong)
 
   // The two decode different types, so they do not fit in one list.
   list.each([rest.route(followup), rest.route(callback)], fn(found) {
@@ -1365,7 +1351,8 @@ pub fn a_path_credential_replaces_the_bot_token_test() {
   let sent =
     webhook.execute(webhook_credential(), payload(), thread: None)
     |> authorization_of
-  let answered = authorization_of(interaction.callback(responder(), payload()))
+  let answered =
+    authorization_of(interaction.callback(responder(), interaction.Pong))
   let followed_up =
     authorization_of(interaction.create_followup(responder(), payload()))
   let ordinary = authorization_of(message.send(channel_id(), message.new()))
@@ -1377,8 +1364,8 @@ pub fn a_path_credential_replaces_the_bot_token_test() {
 }
 
 pub fn a_callback_can_ask_for_its_response_test() {
-  let quiet = interaction.callback(responder(), payload())
-  let loud = interaction.callback_with_response(responder(), payload())
+  let quiet = interaction.callback(responder(), interaction.Pong)
+  let loud = interaction.callback_with_response(responder(), interaction.Pong)
 
   assert query_of(quiet) == ""
   assert query_of(loud) == "?with_response=true"
@@ -1437,7 +1424,7 @@ pub fn a_json_route_decodes_into_its_model_test() {
 
   let assert Ok(fetched) =
     rest.response(call, status: 200, headers: [], body: <<
-      "{\"id\":\"7\",\"channel_id\":\"9\",\"author\":{\"id\":\"3\"},\"content\":\"pong\"}":utf8,
+      "{\"id\":\"7\",\"channel_id\":\"9\",\"author\":{\"id\":\"3\"},\"content\":\"pong\",\"type\":0}":utf8,
     >>)
 
   assert fetched.id == id.from_string("7")
@@ -1497,7 +1484,7 @@ pub fn a_hand_rolled_call_goes_through_the_limiter_test() {
       now_ms: 1,
       input: limiter.Settled(
         limiter.Ticket(1),
-        headers.to_limiter_outcome(headers.outcome(
+        headers.outcome(
           200,
           [
             #("x-ratelimit-bucket", "abcd"),
@@ -1506,7 +1493,7 @@ pub fn a_hand_rolled_call_goes_through_the_limiter_test() {
             #("x-ratelimit-reset-after", "5.0"),
           ],
           "",
-        )),
+        ),
       ),
     )
   assert list.contains(

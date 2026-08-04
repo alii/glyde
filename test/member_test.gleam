@@ -26,7 +26,7 @@ pub fn decodes_a_rest_member_test() {
   assert who.avatar == Some("ffff")
   assert who.banner == None
   assert list.map(who.roles, id.to_string) == ["41771983423143936"]
-  assert who.joined_at == Some("2015-04-26T06:26:56.936000+00:00")
+  assert who.joined_at == Present("2015-04-26T06:26:56.936000+00:00")
   assert who.deaf == Some(False)
   assert who.mute == Some(True)
   assert who.pending == Some(False)
@@ -44,8 +44,8 @@ pub fn decodes_an_interaction_resolved_member_test() {
   assert who.deaf == None
   assert who.mute == None
   let assert Some(perms) = who.permissions
-  assert permissions.to_string(perms) == "104324673"
-  assert permissions.contains(perms, permissions.ViewChannel) == True
+  assert permissions.to_string(permissions.raw(perms)) == "104324673"
+  assert permissions.allows(perms, permissions.ViewChannel) == True
 }
 
 /// GUILD_MEMBER_UPDATE omits `flags` despite the reference page marking it
@@ -66,10 +66,14 @@ pub fn decodes_a_guild_member_update_test() {
 }
 
 /// A guest was invited to one channel and never joined the guild, so Discord
-/// sends a null `joined_at`.
+/// sends a null `joined_at`. A partial that drops the key is a different
+/// answer: the payload never said, not "this is a guest".
 pub fn a_guest_has_no_join_date_test() {
   let assert Ok(guest) = parse("{\"roles\":[],\"joined_at\":null}")
-  assert guest.joined_at == None
+  assert guest.joined_at == Null
+
+  let assert Ok(partial) = parse("{\"roles\":[]}")
+  assert partial.joined_at == Absent
 }
 
 /// `roles` is the only field all five wire shapes carry, but a partial can
@@ -344,23 +348,7 @@ pub fn an_avatar_is_a_data_uri_test() {
     <> "\"banner\":\"data:image/gif;base64,R0lGODlh\"}"
 }
 
-pub fn a_ban_can_delete_nothing_test() {
-  assert payload_json(
-      member.create_ban_body(member.CreateBan(delete_message_seconds: None)),
-    )
-    == "{}"
-}
-
-pub fn a_ban_can_sweep_a_week_of_messages_test() {
-  assert payload_json(
-      member.create_ban_body(
-        member.CreateBan(delete_message_seconds: Some(604_800)),
-      ),
-    )
-    == "{\"delete_message_seconds\":604800}"
-}
-
-/// The three bodies this module exists to build, each carrying no files.
+/// The two bodies this module exists to build, each carrying no files.
 pub fn every_payload_reaches_its_endpoint_test() {
   let edit =
     member.EditGuildMember(..member.edit_guild_member(), nick: Present("Mod"))
@@ -371,8 +359,4 @@ pub fn every_payload_reaches_its_endpoint_test() {
     member.EditCurrentMember(..member.edit_current_member(), bio: Null)
   assert member.edit_current_member_body(current)
     == body.json([#("bio", json.null())])
-
-  let ban = member.CreateBan(delete_message_seconds: Some(60))
-  assert member.create_ban_body(ban)
-    == body.json([#("delete_message_seconds", json.int(60))])
 }

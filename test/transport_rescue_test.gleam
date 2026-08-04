@@ -4,6 +4,7 @@
 
 import gleam/http
 import gleam/http/request
+import gleam/option.{Some}
 import glyde/transport
 import glyde/transport/erlang as erlang_transport
 import glyde/websocket
@@ -38,8 +39,13 @@ pub fn a_dial_that_raised_comes_back_as_an_ending_socket_test() {
 
   assert events
     == [
-      transport.Failed("error: badarg at {public_key,cacerts_get,0,[]}"),
-      transport.Closed(1006, ""),
+      transport.Closed(
+        1006,
+        "",
+        Some(transport.TransportFailed(
+          "error: badarg at {public_key,cacerts_get,0,[]}",
+        )),
+      ),
     ]
   assert websocket.finished(socket)
 }

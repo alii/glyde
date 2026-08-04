@@ -11,13 +11,14 @@ gleam add glyde
 Here's an example bot that answers `!ping` and counts how many it has sent:
 
 ```gleam
+//// A Discord bot that answers "!ping" with "pong!", counting as it goes.
+
 import envoy
 import gleam/int
 import gleam/io
 import glyde
 import glyde/intents
 import glyde/message
-import glyde/status
 
 pub fn main() -> Nil {
   let assert Ok(token) = envoy.get("DISCORD_TOKEN")
@@ -38,14 +39,8 @@ pub fn main() -> Nil {
   |> glyde.on_message(fn(pongs, msg) {
     use <- glyde.when(msg.content == "!ping", or: pongs)
     let pong = message.text("pong! #" <> int.to_string(pongs + 1))
-    use posted <- glyde.do(message.reply(msg, pong))
-    case posted {
-      Ok(_) -> glyde.continue(pongs + 1)
-      Error(why) -> {
-        io.println("could not reply: " <> status.describe_failure(why))
-        glyde.continue(pongs)
-      }
-    }
+    use _ <- glyde.do(message.reply(msg, pong))
+    glyde.continue(pongs + 1)
   })
   |> glyde.run
 }
@@ -89,7 +84,7 @@ pub fn hello_queues_for_an_identify_slot_test() {
       RequestIdentifySlot(Conn(5)),
       Note(gateway.AwaitingIdentifySlot),
     ]
-  assert after.phase
+  assert phase(after)
     == Queued(Beat(interval_ms: interval, unacked: 0, quiet: False))
 }
 ```
@@ -106,11 +101,10 @@ from, which carries the decoder for that endpoint.
 
 ```gleam
 let call =
-  channel.create_message(
+  message.send(
     channel_id,
-    draft.text("shipped")
-      |> draft.embed(embed.new() |> embed.title("v0.1.0"))
-      |> draft.to_body,
+    message.text("shipped")
+      |> message.embed(embed.new() |> embed.title("v0.1.0")),
   )
 
 let request = rest.request(rest.config(rest.bot(token)), call)
@@ -123,7 +117,7 @@ request at all, which is what `glyde/rest/limiter` schedules on. The limiter is
 a state machine too: it says when to send and what a 429 means, it does not
 sleep and it does not retry behind your back.
 
-84 endpoints, covering channels and messages, guilds, members, roles, threads,
+80 endpoints, covering channels and messages, guilds, members, roles, threads,
 application commands, interactions, webhooks and users. Each noun is one
 module: `glyde/message` holds the received type, the `Draft` and `Edit`
 builders, and every endpoint that acts on a message. `message.to_body` writes

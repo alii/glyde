@@ -19,6 +19,7 @@ import glyde/interaction.{
 import glyde/mentions
 import glyde/message.{Edit}
 import glyde/permissions
+import glyde/rest
 import glyde/rest/body
 
 fn parse(text: String) -> Result(interaction.Interaction, json.DecodeError) {
@@ -47,8 +48,13 @@ pub fn decodes_a_ping_test() {
   assert ping.user == None
   assert ping.attachment_size_limit == None
   assert dict.size(ping.authorizing_integration_owners) == 0
-  assert interaction.reveal_token(ping.token) == "secret"
   assert ping.version == 1
+
+  // The token is opaque, so read it back the way a caller does: through the
+  // callback route it authorises.
+  let call = interaction.callback(interaction.responding_to(ping), Pong)
+  let sent = rest.request(rest.config(rest.unauthenticated()), call)
+  assert string.contains(sent.path, "secret")
 }
 
 pub fn requires_id_application_id_type_and_token_test() {
@@ -99,22 +105,16 @@ pub fn data_decoder_dispatches_on_the_envelope_type_test() {
   let assert interaction.AutocompleteData(..) = autocomplete
 }
 
-/// An unmodelled type keeps the envelope's NUMBER, so `UnknownData` still says
-/// what arrived even though the decoder is chosen by the variant.
-pub fn an_unmodelled_type_keeps_its_wire_number_test() {
+/// An interaction type whose data this build does not model gives `NoData`,
+/// so the envelope's id and token are still there for a caller to answer
+/// "unsupported".
+pub fn an_unmodelled_data_type_gives_no_data_test() {
   let assert Ok(modal) =
     json.parse(
       "{\"custom_id\":\"feedback\"}",
       interaction.data_decoder(interaction.ModalSubmitInteraction),
     )
-  let assert interaction.UnknownData(type_: 5, ..) = modal
-
-  let assert Ok(future) =
-    json.parse(
-      "{\"whatever\":7}",
-      interaction.data_decoder(interaction.UnknownInteractionType(99)),
-    )
-  let assert interaction.UnknownData(type_: 99, ..) = future
+  assert modal == interaction.NoData
 }
 
 pub fn decodes_a_slash_command_test() {
@@ -122,13 +122,13 @@ pub fn decodes_a_slash_command_test() {
     parse(
       "{\"id\":\"1\",\"application_id\":\"2\",\"type\":2,\"token\":\"t\",\"version\":1,\"guild_id\":\"9\",\"channel_id\":\"8\",\"locale\":\"en-GB\",\"guild_locale\":\"en-US\",\"app_permissions\":\"2048\",\"attachment_size_limit\":26214400,\"data\":{\"id\":\"3\",\"name\":\"blep\",\"type\":1,\"guild_id\":\"7\",\"options\":[{\"name\":\"animal\",\"type\":3,\"value\":\"cat\"}]}}",
     )
-  assert interaction.interaction_type_to_int(invoked.type_) == 2
+  assert invoked.type_ == interaction.ApplicationCommandInteraction
   assert option.map(invoked.guild_id, id.to_string) == Some("9")
   assert invoked.locale == Some("en-GB")
   assert invoked.guild_locale == Some("en-US")
   assert invoked.attachment_size_limit == Some(26_214_400)
   let assert Some(allowed) = invoked.app_permissions
-  assert permissions.to_string(allowed) == "2048"
+  assert permissions.to_string(permissions.raw(allowed)) == "2048"
 
   let assert interaction.CommandData(id:, type_:, guild_id:, options:, ..) =
     invoked.data
@@ -162,7 +162,7 @@ pub fn component_data_distinguishes_by_type_not_emptiness_test() {
     )
   let assert interaction.ComponentData(custom_id:, submission:, ..) = button
   assert custom_id == "click_one"
-  assert submission == interaction.ButtonPress
+  assert submission == Some(interaction.ButtonPress)
 
   let assert Ok(select) =
     json.parse(
@@ -170,7 +170,7 @@ pub fn component_data_distinguishes_by_type_not_emptiness_test() {
       interaction.data_decoder(interaction.MessageComponentInteraction),
     )
   let assert interaction.ComponentData(submission:, ..) = select
-  assert submission == interaction.StringSelect(values: [])
+  assert submission == Some(interaction.StringSelect(values: []))
 
   let assert Ok(chosen) =
     json.parse(
@@ -178,7 +178,7 @@ pub fn component_data_distinguishes_by_type_not_emptiness_test() {
       interaction.data_decoder(interaction.MessageComponentInteraction),
     )
   let assert interaction.ComponentData(submission:, ..) = chosen
-  assert submission == interaction.StringSelect(values: ["a", "b"])
+  assert submission == Some(interaction.StringSelect(values: ["a", "b"]))
 }
 
 /// The entity selects submit ids, not labels, and each one says which kind of
@@ -190,7 +190,8 @@ pub fn entity_select_submissions_carry_typed_ids_test() {
       interaction.data_decoder(interaction.MessageComponentInteraction),
     )
   let assert interaction.ComponentData(submission:, ..) = users
-  assert submission == interaction.UserSelect(users: [id.from_string("7")])
+  assert submission
+    == Some(interaction.UserSelect(users: [id.from_string("7")]))
 
   let assert Ok(roles) =
     json.parse(
@@ -198,7 +199,8 @@ pub fn entity_select_submissions_carry_typed_ids_test() {
       interaction.data_decoder(interaction.MessageComponentInteraction),
     )
   let assert interaction.ComponentData(submission:, ..) = roles
-  assert submission == interaction.RoleSelect(roles: [id.from_string("8")])
+  assert submission
+    == Some(interaction.RoleSelect(roles: [id.from_string("8")]))
 
   let assert Ok(channels) =
     json.parse(
@@ -207,7 +209,7 @@ pub fn entity_select_submissions_carry_typed_ids_test() {
     )
   let assert interaction.ComponentData(submission:, ..) = channels
   assert submission
-    == interaction.ChannelSelect(channels: [id.from_string("9")])
+    == Some(interaction.ChannelSelect(channels: [id.from_string("9")]))
 }
 
 /// A mentionable select mixes the two, and only `resolved` tells them apart.
@@ -223,12 +225,14 @@ pub fn a_mentionable_select_splits_users_from_roles_test() {
       interaction.data_decoder(interaction.MessageComponentInteraction),
     )
   let assert interaction.ComponentData(submission:, ..) = picked
+  // "9" is in neither map, so it is dropped rather than tagged.
   assert submission
-    == interaction.MentionableSelect(mentions: [
-      interaction.MentionedUser(id.from_string("7")),
-      interaction.MentionedRole(id.from_string("8")),
-      interaction.UnknownMentionable("9"),
-    ])
+    == Some(
+      interaction.MentionableSelect(mentions: [
+        interaction.MentionedUser(id.from_string("7")),
+        interaction.MentionedRole(id.from_string("8")),
+      ]),
+    )
 }
 
 /// `resolved.members` is enough on its own: a guild mentionable select fills
@@ -242,15 +246,17 @@ pub fn a_mentionable_only_in_members_is_a_user_test() {
     )
   let assert interaction.ComponentData(submission:, ..) = picked
   assert submission
-    == interaction.MentionableSelect(mentions: [
-      interaction.MentionedUser(id.from_string("7")),
-    ])
+    == Some(
+      interaction.MentionableSelect(mentions: [
+        interaction.MentionedUser(id.from_string("7")),
+      ]),
+    )
 }
 
-/// A component type this build does not know keeps its values as sent, and so
-/// does one it knows by name but that submits nothing: type 1 is an action row
-/// and type 4 a text input, and neither sends a component interaction.
-pub fn an_unknown_component_submission_keeps_its_values_test() {
+/// A component type this build does not model gives no submission, and so
+/// does one it knows by name but that submits nothing: type 1 is an action
+/// row and type 4 a text input, and neither sends a component interaction.
+pub fn an_unmodelled_component_submission_is_none_test() {
   let types = [42, 1, 4]
   list.each(types, fn(wire) {
     let assert Ok(future) =
@@ -260,33 +266,29 @@ pub fn an_unknown_component_submission_keeps_its_values_test() {
           <> ",\"values\":[\"a\"]}",
         interaction.data_decoder(interaction.MessageComponentInteraction),
       )
-    let assert interaction.ComponentData(submission:, ..) = future
-    assert submission
-      == interaction.UnknownSubmission(component_type: wire, values: ["a"])
+    let assert interaction.ComponentData(custom_id:, submission:, ..) = future
+    assert custom_id == "x"
+    assert submission == None
   })
 }
 
-/// MODAL_SUBMIT is unmodelled, so a caller hand-rolls against the raw payload.
-pub fn a_modal_submit_keeps_its_raw_payload_test() {
+/// MODAL_SUBMIT is unmodelled: `type_` names it and `data` is `NoData`.
+pub fn a_modal_submit_decodes_as_no_data_test() {
   let assert Ok(modal) =
     parse(
       "{\"id\":\"1\",\"application_id\":\"2\",\"type\":5,\"token\":\"t\",\"version\":1,\"data\":{\"custom_id\":\"feedback\",\"components\":[]}}",
     )
   assert modal.type_ == interaction.ModalSubmitInteraction
-  let assert interaction.UnknownData(type_: 5, raw:) = modal.data
-  assert decode.run(raw, decode.at(["custom_id"], decode.string))
-    == Ok("feedback")
+  assert modal.data == interaction.NoData
 }
 
-/// The interaction decode is all or nothing.
-pub fn a_future_interaction_type_decodes_test() {
-  let assert Ok(future) =
+/// A `type` this build has no name for is a glyde bug, so it fails the decode
+/// and reaches `on_status` as `Undecodable`.
+pub fn a_future_interaction_type_fails_the_decode_test() {
+  let assert Error(_) =
     parse(
       "{\"id\":\"1\",\"application_id\":\"2\",\"type\":99,\"token\":\"t\",\"version\":1,\"data\":{\"whatever\":7}}",
     )
-  assert future.type_ == interaction.UnknownInteractionType(99)
-  let assert interaction.UnknownData(type_: 99, raw:) = future.data
-  assert decode.run(raw, decode.at(["whatever"], decode.int)) == Ok(7)
 }
 
 /// `Interaction.guild` is a three-field partial, not a full guild.
@@ -433,7 +435,7 @@ pub fn resolved_channels_carry_the_users_permissions_test() {
   assert room.name == Some("a thread")
   assert option.map(room.parent_id, id.to_string) == Some("7")
   let assert Some(granted) = room.permissions
-  assert permissions.to_string(granted) == "2048"
+  assert permissions.to_string(permissions.raw(granted)) == "2048"
   let assert Some(meta) = room.thread_metadata
   assert meta.auto_archive_duration == channel.OneDay
 }
@@ -457,10 +459,10 @@ pub fn a_subcommand_has_no_value_test() {
     options(
       "[{\"name\":\"config\",\"type\":2,\"options\":[{\"name\":\"set\",\"type\":1,\"options\":[{\"name\":\"key\",\"type\":3,\"value\":\"colour\"}]}]}]",
     )
-  assert group.type_ == application_command.SubCommandGroup
+  assert group.type_ == Some(application_command.SubCommandGroup)
   assert group.value == interaction.NoValue
   let assert [sub] = group.options
-  assert sub.type_ == application_command.SubCommand
+  assert sub.type_ == Some(application_command.SubCommand)
   assert sub.value == interaction.NoValue
   let assert [leaf] = sub.options
   assert leaf.value == interaction.StringValue("colour")
@@ -519,9 +521,9 @@ pub fn snowflake_options_arrive_as_strings_test() {
 }
 
 /// One failure here loses the whole INTERACTION_CREATE.
-pub fn an_unknown_option_type_decodes_test() {
+pub fn an_unmodelled_option_type_decodes_test() {
   let assert [odd] = options("[{\"name\":\"x\",\"type\":77,\"value\":\"v\"}]")
-  assert odd.type_ == application_command.UnknownOptionType(77)
+  assert odd.type_ == None
   assert odd.value == interaction.StringValue("v")
 }
 
@@ -657,9 +659,8 @@ pub fn mentionable_option_reads_the_resolved_kind_test() {
   assert interaction.mentionable_option(picked, "whom", resolved)
     == Some(interaction.MentionedUser(id.from_string("7")))
 
-  // In neither map, so nothing here says which it is.
-  assert interaction.mentionable_option(picked, "stranger", resolved)
-    == Some(interaction.UnknownMentionable("99"))
+  // In neither map, so nothing here says which it is: dropped.
+  assert interaction.mentionable_option(picked, "stranger", resolved) == None
 
   // And it takes the declared type like the other snowflake accessors do.
   assert interaction.mentionable_option(picked, "reason", resolved) == None
@@ -676,9 +677,15 @@ pub fn the_no_owner_sentinel_is_decoded_away_test() {
       "{\"id\":\"1\",\"application_id\":\"2\",\"type\":2,\"token\":\"t\",\"version\":1,\"authorizing_integration_owners\":{\"0\":\"0\",\"1\":\"80351110224678912\"},\"data\":{\"id\":\"3\",\"name\":\"x\"}}",
     )
   let owners = invoked.authorizing_integration_owners
-  assert dict.get(owners, application_command.GuildInstall)
+  assert dict.get(
+      owners,
+      interaction.KnownIntegration(application_command.GuildInstall),
+    )
     == Ok(interaction.NoOwner)
-  assert dict.get(owners, application_command.UserInstall)
+  assert dict.get(
+      owners,
+      interaction.KnownIntegration(application_command.UserInstall),
+    )
     == Ok(interaction.OwnedBy("80351110224678912"))
 
   assert interaction.authorizing_guild_id(invoked) == None
@@ -707,9 +714,9 @@ pub fn an_unparseable_integration_key_does_not_fail_the_decode_test() {
     )
   let owners = invoked.authorizing_integration_owners
   assert dict.size(owners) == 2
-  assert dict.get(owners, application_command.UnknownIntegrationKey("nope"))
+  assert dict.get(owners, interaction.UnparsedIntegrationKey("nope"))
     == Ok(interaction.OwnedBy("9"))
-  assert dict.get(owners, application_command.UnknownIntegrationKey("nah"))
+  assert dict.get(owners, interaction.UnparsedIntegrationKey("nah"))
     == Ok(interaction.OwnedBy("8"))
 }
 
@@ -737,15 +744,10 @@ pub fn interaction_type_round_trips_test() {
   ]
   list.each(cases, fn(pair) {
     let #(wire, variant) = pair
-    assert interaction.interaction_type_from_int(wire) == variant
+    assert interaction.interaction_type_from_int(wire) == Some(variant)
     assert interaction.interaction_type_to_int(variant) == wire
   })
-  assert interaction.interaction_type_from_int(6)
-    == interaction.UnknownInteractionType(6)
-  assert interaction.interaction_type_to_int(interaction.UnknownInteractionType(
-      6,
-    ))
-    == 6
+  assert interaction.interaction_type_from_int(6) == None
 }
 
 /// The callback numbering has holes, so a dense index sends the wrong number.
@@ -763,16 +765,11 @@ pub fn callback_type_round_trips_over_its_holes_test() {
   ]
   list.each(cases, fn(pair) {
     let #(wire, variant) = pair
-    assert interaction.callback_type_from_int(wire) == variant
+    assert interaction.callback_type_from_int(wire) == Some(variant)
     assert interaction.callback_type_to_int(variant) == wire
   })
   list.each([0, 2, 3, 11, 13], fn(hole) {
-    assert interaction.callback_type_from_int(hole)
-      == interaction.UnknownCallbackType(hole)
-    assert interaction.callback_type_to_int(interaction.UnknownCallbackType(
-        hole,
-      ))
-      == hole
+    assert interaction.callback_type_from_int(hole) == None
   })
 }
 
@@ -794,13 +791,37 @@ pub fn decodes_a_callback_response_test() {
       "{\"interaction\":{\"id\":\"1\",\"type\":2,\"response_message_id\":\"6\",\"response_message_loading\":false,\"response_message_ephemeral\":false},\"resource\":{\"type\":4,\"message\":{\"id\":\"6\",\"channel_id\":\"8\",\"author\":{\"id\":\"5\"},\"content\":\"done\",\"timestamp\":\"2021-01-01T00:00:00+00:00\",\"type\":0}}}",
       interaction.callback_response_decoder(),
     )
-  assert interaction.interaction_type_to_int(answered.interaction.type_) == 2
+  assert answered.interaction.type_ == interaction.ApplicationCommandInteraction
   assert option.map(answered.interaction.response_message_id, id.to_string)
     == Some("6")
   let assert Some(resource) = answered.resource
   assert resource.type_ == interaction.ChannelMessageWithSourceCallback
   let assert Some(posted) = resource.message
   assert posted.content == "done"
+}
+
+/// `type` on a callback and its resource are always sent, so an unmodelled
+/// value is a glyde bug that fails the decode.
+pub fn unmodelled_callback_types_fail_test() {
+  let assert Error(_) =
+    json.parse(
+      "{\"interaction\":{\"id\":\"1\",\"type\":99}}",
+      interaction.callback_response_decoder(),
+    )
+  let assert Error(_) =
+    json.parse(
+      "{\"interaction\":{\"id\":\"1\",\"type\":2},\"resource\":{\"type\":99}}",
+      interaction.callback_response_decoder(),
+    )
+}
+
+/// A resolved channel's `type` is always sent, so an unmodelled value fails.
+pub fn unmodelled_resolved_channel_type_fails_test() {
+  let assert Error(_) =
+    json.parse(
+      "{\"id\":\"8\",\"type\":99}",
+      interaction.resolved_channel_decoder(),
+    )
 }
 
 /// A deferred response creates no message, so the resource is absent.
@@ -868,19 +889,27 @@ pub fn a_non_snowflake_id_fails_the_decode_test() {
     )
 }
 
-/// One unknown enum value must not fail the whole INTERACTION_CREATE.
-pub fn unknown_enum_values_do_not_sink_the_interaction_test() {
+/// `context` and option types are cosmetic, so an unmodelled value there
+/// yields `None` rather than failing. `channel.type` and `data.type` are
+/// discriminators, so an unmodelled value there fails.
+pub fn unmodelled_enum_handling_test() {
   let assert Ok(invoked) =
     parse(
-      "{\"id\":\"1\",\"application_id\":\"2\",\"type\":2,\"token\":\"t\",\"version\":1,\"context\":77,\"channel\":{\"id\":\"8\",\"type\":98},\"data\":{\"id\":\"3\",\"name\":\"x\",\"type\":9,\"options\":[{\"name\":\"o\",\"type\":88,\"value\":\"v\"}]}}",
+      "{\"id\":\"1\",\"application_id\":\"2\",\"type\":2,\"token\":\"t\",\"version\":1,\"context\":77,\"data\":{\"id\":\"3\",\"name\":\"x\",\"options\":[{\"name\":\"o\",\"type\":88,\"value\":\"v\"}]}}",
     )
-  assert invoked.context == Some(application_command.UnknownContext(77))
-  let assert Some(room) = invoked.channel
-  assert room.type_ == channel.UnknownChannelType(98)
-  let assert interaction.CommandData(type_:, options:, ..) = invoked.data
-  assert type_ == application_command.UnknownCommandType(9)
+  assert invoked.context == None
+  let assert interaction.CommandData(options:, ..) = invoked.data
   let assert [odd] = options
-  assert odd.type_ == application_command.UnknownOptionType(88)
+  assert odd.type_ == None
+
+  let assert Error(_) =
+    parse(
+      "{\"id\":\"1\",\"application_id\":\"2\",\"type\":2,\"token\":\"t\",\"version\":1,\"channel\":{\"id\":\"8\",\"type\":98},\"data\":{\"id\":\"3\",\"name\":\"x\"}}",
+    )
+  let assert Error(_) =
+    parse(
+      "{\"id\":\"1\",\"application_id\":\"2\",\"type\":2,\"token\":\"t\",\"version\":1,\"data\":{\"id\":\"3\",\"name\":\"x\",\"type\":9}}",
+    )
 }
 
 /// A component interaction carries the message its component was attached to.
@@ -899,7 +928,7 @@ pub fn version_defaults_to_one_test() {
   assert invoked.version == 1
 }
 
-/// Every branch ends in `UnknownValue` rather than an error.
+/// Every branch ends in `NoValue` rather than an error.
 pub fn a_value_of_any_shape_still_decodes_test() {
   let odd_shapes = [
     "[{\"name\":\"n\",\"type\":4,\"value\":null}]",
@@ -909,7 +938,7 @@ pub fn a_value_of_any_shape_still_decodes_test() {
   ]
   list.each(odd_shapes, fn(body) {
     let assert [odd] = options(body)
-    let assert interaction.UnknownValue(_) = odd.value
+    assert odd.value == interaction.NoValue
   })
 }
 
@@ -919,10 +948,14 @@ fn boundary() -> body.Boundary {
 }
 
 fn encoded(response: interaction.InteractionResponse) -> String {
-  json.to_string(interaction.to_json(response))
+  json.to_string(interaction.response_to_json(response))
 }
 
-fn choice(name: String) -> application_command.ApplicationCommandOptionChoice {
+fn choice(
+  name: String,
+) -> application_command.ApplicationCommandOptionChoice(
+  application_command.ChoiceValue,
+) {
   application_command.ApplicationCommandOptionChoice(
     name: name,
     name_localizations: None,
@@ -1194,7 +1227,12 @@ pub fn no_suggestions_is_still_a_choices_array_test() {
 pub fn choices_go_out_in_the_order_given_test() {
   let choices = [choice("alpha"), choice("beta")]
   let encoded_choices =
-    json.to_string(json.array(choices, application_command.choice_to_json))
+    json.to_string(
+      json.array(choices, application_command.choice_to_json(
+        _,
+        application_command.choice_value_to_json,
+      )),
+    )
 
   assert encoded(AutocompleteResult(choices: choices))
     == "{\"type\":8,\"data\":{\"choices\":" <> encoded_choices <> "}}"
@@ -1206,7 +1244,12 @@ pub fn a_list_past_the_limit_is_sent_whole_test() {
   let choices =
     list.index_map(list.repeat(Nil, 30), fn(_, index) { choice(int(index)) })
   let encoded_choices =
-    json.to_string(json.array(choices, application_command.choice_to_json))
+    json.to_string(
+      json.array(choices, application_command.choice_to_json(
+        _,
+        application_command.choice_value_to_json,
+      )),
+    )
 
   assert encoded(AutocompleteResult(choices: choices))
     == "{\"type\":8,\"data\":{\"choices\":" <> encoded_choices <> "}}"

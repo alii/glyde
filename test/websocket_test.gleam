@@ -3,25 +3,27 @@
 
 import gleam/dynamic.{type Dynamic}
 import gleam/list
+import gleam/option.{Some}
 import glyde/transport
 import glyde/websocket
+import glyde/websocket/sendcode
 
 pub fn close_code_is_1000_and_the_private_range_test() {
-  assert websocket.close_code(1000) |> ok
-  assert websocket.close_code(3000) |> ok
-  assert websocket.close_code(4000) |> ok
-  assert websocket.close_code(4999) |> ok
+  assert sendcode.new(1000) |> ok
+  assert sendcode.new(3000) |> ok
+  assert sendcode.new(4000) |> ok
+  assert sendcode.new(4999) |> ok
 
-  assert websocket.close_code(1001) == Error(1001)
-  assert websocket.close_code(1005) == Error(1005)
-  assert websocket.close_code(1006) == Error(1006)
-  assert websocket.close_code(2999) == Error(2999)
-  assert websocket.close_code(5000) == Error(5000)
-  assert websocket.close_code(0) == Error(0)
-  assert websocket.close_code(-1) == Error(-1)
+  assert sendcode.new(1001) == Error(1001)
+  assert sendcode.new(1005) == Error(1005)
+  assert sendcode.new(1006) == Error(1006)
+  assert sendcode.new(2999) == Error(2999)
+  assert sendcode.new(5000) == Error(5000)
+  assert sendcode.new(0) == Error(0)
+  assert sendcode.new(-1) == Error(-1)
 }
 
-fn ok(made: Result(websocket.CloseCode, Int)) -> Bool {
+fn ok(made: Result(sendcode.SendCode, Int)) -> Bool {
   case made {
     Ok(_) -> True
     Error(_) -> False
@@ -46,8 +48,9 @@ pub fn a_failed_dial_arrives_as_failed_then_closed_test() {
   let #(key, socket) = undiallable()
   let socket = websocket.turn(socket, timeout: 0, report: collect(key))
 
-  let assert [transport.Failed(reason), transport.Closed(code, "")] =
-    list.reverse(recall(key))
+  let assert [
+    transport.Closed(code, "", Some(transport.TransportFailed(reason))),
+  ] = list.reverse(recall(key))
   assert code == 1006
   assert reason == "bad url: only wss is supported: ws://gateway.discord.gg/"
   assert websocket.finished(socket)
@@ -68,8 +71,8 @@ pub fn turning_a_finished_socket_reports_nothing_test() {
 /// None of them raises, and none of them puts the socket back up.
 pub fn a_socket_that_never_connected_refuses_every_write_test() {
   let #(_, socket) = undiallable()
-  let assert Ok(bye) = websocket.close_code(1000)
-  let assert Ok(resumable) = websocket.close_code(4000)
+  let assert Ok(bye) = sendcode.new(1000)
+  let assert Ok(resumable) = sendcode.new(4000)
 
   assert !websocket.live(socket)
   assert !websocket.live(websocket.send_text(socket, "hi"))
@@ -86,7 +89,7 @@ pub fn a_refused_write_still_owes_the_close_test() {
   let socket = websocket.drop(socket)
   let socket = websocket.turn(socket, timeout: 0, report: collect(key))
 
-  let assert [transport.Failed(_), transport.Closed(1006, "")] =
+  let assert [transport.Closed(1006, "", Some(transport.TransportFailed(_)))] =
     list.reverse(recall(key))
   assert websocket.finished(socket)
 }

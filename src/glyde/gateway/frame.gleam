@@ -4,15 +4,12 @@
 //// dispatch needs a sequence and a name. Anything else Discord sends is read
 //// or ignored, never fatal.
 
-import gleam/bool
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import gleam/json.{type Json}
-import gleam/list
 import gleam/option.{type Option, None, Some}
-import glyde/gateway/presence.{type Presence}
-import glyde/intents.{type Intents}
+import glyde/token
 import glyde/wire
 
 /// Discord sends 41250 today. The bounds are ours: an unclamped 0 would arm a
@@ -20,11 +17,6 @@ import glyde/wire
 const min_heartbeat_interval_ms: Int = 1000
 
 const max_heartbeat_interval_ms: Int = 600_000
-
-/// Discord's rule, not ours: IDENTIFY's `large_threshold` is 50 to 250.
-const min_large_threshold: Int = 50
-
-const max_large_threshold: Int = 250
 
 /// Discord's gateway opcode table, both directions. The numbers are theirs, 5
 /// was removed and is not here, and the names carry an `Op` prefix because
@@ -75,6 +67,28 @@ pub fn opcode_from_int(value: Int) -> Option(Opcode) {
     10 -> Some(OpHello)
     11 -> Some(OpHeartbeatAck)
     _ -> None
+  }
+}
+
+/// The six opcodes a client ever writes. `Outbound` is typed on this rather
+/// than `Opcode`, so a frame carrying a receive-only op cannot be built.
+pub type SendOp {
+  SendHeartbeat
+  SendIdentify
+  SendPresenceUpdate
+  SendVoiceStateUpdate
+  SendResume
+  SendRequestGuildMembers
+}
+
+pub fn send_op_to_int(op: SendOp) -> Int {
+  case op {
+    SendHeartbeat -> 1
+    SendIdentify -> 2
+    SendPresenceUpdate -> 3
+    SendVoiceStateUpdate -> 4
+    SendResume -> 6
+    SendRequestGuildMembers -> 8
   }
 }
 
@@ -212,139 +226,15 @@ fn resumable(data: Dynamic) -> Bool {
   }
 }
 
-/// One shard's place in the fleet, sent as `[index, count]`. Opaque because
-/// `index` is 0-based and must be below `count`: `sharding` is the only thing
-/// that can make one, so a fleet the gateway would answer with close 4010
-/// cannot be built at all. Labelled and not a pair, because swapping the two
-/// is also 4010 and takes a restart to spot.
-pub opaque type Sharding {
-  Sharding(index: Int, count: Int)
-}
-
-/// Why a fleet was refused. Both are configuration mistakes that no reconnect
-/// fixes, so they are caught before a shard exists.
-pub type ShardingError {
-  /// A fleet has at least one shard in it.
-  EmptyFleet(count: Int)
-  /// `index` is 0-based, so shard 16 of 16 is not a shard.
-  IndexOutOfRange(index: Int, count: Int)
-}
-
-/// `sharding(index: 0, count: 1)` is an unsharded bot, which Discord reads as
-/// sending no shard array at all.
-pub fn sharding(
-  index index: Int,
-  count count: Int,
-) -> Result(Sharding, ShardingError) {
-  use <- bool.guard(when: count < 1, return: Error(EmptyFleet(count:)))
-  use <- bool.guard(
-    when: index < 0 || index >= count,
-    return: Error(IndexOutOfRange(index:, count:)),
-  )
-  Ok(Sharding(index:, count:))
-}
-
-/// The one fleet that needs no checking, and the default a bot connects with.
-pub fn unsharded() -> Sharding {
-  Sharding(index: 0, count: 1)
-}
-
-/// This shard's 0-based place in the fleet.
-pub fn shard_index(sharding: Sharding) -> Int {
-  sharding.index
-}
-
-/// How many shards the fleet has.
-pub fn shard_count(sharding: Sharding) -> Int {
-  sharding.count
-}
-
-/// Guild size above which Discord sends an offline member list. Opaque so the
-/// clamp happens once, where the value is made, rather than again wherever it
-/// is written.
-pub opaque type LargeThreshold {
-  LargeThreshold(value: Int)
-}
-
-/// Clamped rather than refused: a value outside Discord's range is a number
-/// to correct, not a connection to fail.
-pub fn large_threshold(value: Int) -> LargeThreshold {
-  LargeThreshold(int.clamp(
-    value,
-    min: min_large_threshold,
-    max: max_large_threshold,
-  ))
-}
-
-pub fn large_threshold_value(threshold: LargeThreshold) -> Int {
-  threshold.value
-}
-
-/// IDENTIFY's `properties` object. Analytics only; Discord acts on none of
-/// them. The `$os` spelling is deprecated, so these go out unprefixed.
-pub type Properties {
-  Properties(os: String, browser: String, device: String)
-}
-
-/// Everything IDENTIFY puts on the wire.
-pub type Identity {
-  Identity(
-    token: String,
-    intents: Intents,
-    properties: Properties,
-    /// Asks for per-payload zlib. Not the `compress=` query parameter, which
-    /// asks for transport compression; Discord will not do both.
-    compress: Bool,
-    large_threshold: LargeThreshold,
-    shard: Sharding,
-    /// What the bot looks like the moment it connects. Op 3 sends the same
-    /// object once it is live.
-    presence: Option(Presence),
-  )
-}
-
-pub fn identify(identity: Identity) -> Outbound {
-  let fields = [
-    #("token", json.string(identity.token)),
-    #(
-      "properties",
-      json.object([
-        #("os", json.string(identity.properties.os)),
-        #("browser", json.string(identity.properties.browser)),
-        #("device", json.string(identity.properties.device)),
-      ]),
-    ),
-    #("compress", json.bool(identity.compress)),
-    #(
-      "large_threshold",
-      json.int(large_threshold_value(identity.large_threshold)),
-    ),
-    #(
-      "shard",
-      json.preprocessed_array([
-        json.int(identity.shard.index),
-        json.int(identity.shard.count),
-      ]),
-    ),
-    #("intents", intents.to_json(identity.intents)),
-  ]
-  // Discord answers `"presence": null` with close 4002, so the key is omitted.
-  let fields = case identity.presence {
-    Some(shown) -> list.append(fields, [#("presence", presence.to_json(shown))])
-    None -> fields
-  }
-  outbound(OpIdentify, json.object(fields))
-}
-
 pub fn resume(
-  token token: String,
+  token secret: token.Token,
   session_id session_id: String,
   seq seq: Int,
 ) -> Outbound {
   outbound(
-    OpResume,
+    SendResume,
     json.object([
-      #("token", json.string(token)),
+      #("token", json.string(token.reveal(secret))),
       #("session_id", json.string(session_id)),
       // `seq`, not `s`. Sending `s` reads as a missing sequence and earns 4007.
       #("seq", json.int(seq)),
@@ -355,25 +245,36 @@ pub fn resume(
 /// `None` before this session has seen a dispatch: Discord wants a literal
 /// `null`, and a 0 asks for a replay from the start and earns an op 9.
 pub fn heartbeat(seq: Option(Int)) -> Outbound {
-  outbound(OpHeartbeat, json.nullable(seq, json.int))
+  outbound(SendHeartbeat, json.nullable(seq, json.int))
 }
 
-/// A serialised payload and the opcode that built it. The opcode travels with
-/// the text so nothing downstream has to read it back out of the JSON, and
-/// `text` is the only thing that goes on the socket: IDENTIFY carries the
-/// token, and a log line is the easiest place to leak one.
-pub type Outbound {
-  Outbound(op: Opcode, text: String)
+/// A serialised payload and the opcode that built it. Opaque so the two cannot
+/// disagree: `outbound` is the only constructor, and it derives the text from
+/// the opcode. `text` is the only thing that goes on the socket, and IDENTIFY
+/// carries the token, so a log line is the easiest place to leak one.
+pub opaque type Outbound {
+  Outbound(op: SendOp, text: String)
+}
+
+/// The opcode this frame was built with. Carried so nothing downstream has to
+/// read it back out of the JSON.
+pub fn outbound_op(outbound: Outbound) -> SendOp {
+  outbound.op
+}
+
+/// The serialised frame, and the only thing that goes on the socket.
+pub fn outbound_text(outbound: Outbound) -> String {
+  outbound.text
 }
 
 /// One gateway payload, serialised. `s` and `t` are receive only, so an
 /// outbound frame is `op` and `d`. Every frame glyde sends is built here,
 /// including the ones `glyde/gateway/command` encodes.
-pub fn outbound(op: Opcode, data: Json) -> Outbound {
+pub fn outbound(op: SendOp, data: Json) -> Outbound {
   Outbound(
     op:,
     text: json.to_string(
-      json.object([#("op", json.int(opcode_to_int(op))), #("d", data)]),
+      json.object([#("op", json.int(send_op_to_int(op))), #("d", data)]),
     ),
   )
 }

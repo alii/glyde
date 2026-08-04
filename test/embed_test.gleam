@@ -4,6 +4,7 @@ import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
+import glyde/attachment
 import glyde/embed
 import glyde/flags
 import glyde/id
@@ -66,11 +67,9 @@ pub fn full_rich_embed_decodes_test() {
     == Some(embed.EmbedMedia(
       url: Some("i"),
       proxy_url: Some("ip"),
-      height: Some(10),
-      width: Some(20),
+      dimensions: Some(attachment.Dimensions(width: 20, height: 10)),
       content_type: None,
       placeholder: None,
-      placeholder_version: None,
       description: None,
       flags: flags.from_int(0),
     ))
@@ -127,21 +126,21 @@ pub fn media_placeholder_fields_decode_test() {
     )
   let assert Some(image) = value.image
   assert image.content_type == Some("image/png")
-  assert image.placeholder == Some("abc")
-  assert image.placeholder_version == Some(1)
+  assert image.placeholder
+    == Some(attachment.Placeholder(hash: "abc", version: 1))
   assert image.description == Some("alt text")
   assert embed.has_media_flag(image.flags, embed.IsAnimated)
 }
 
 /// Discord ships embed types it never documented, so `type` is an open set.
-pub fn undocumented_embed_type_survives_test() {
+/// A value this build has no name for decodes as `None` rather than failing
+/// the embed.
+pub fn undocumented_embed_type_tolerated_test() {
   let assert Ok(value) = parse("{\"type\":\"something_new\"}")
-  assert value.type_ == Some(embed.UnknownEmbedType("something_new"))
-  assert embed.embed_type_to_string(embed.UnknownEmbedType("something_new"))
-    == "something_new"
+  assert value.type_ == None
 }
 
-/// Every documented type has a name, and the tail keeps the raw string.
+/// Every documented type has a name, and an unmodelled one is `None`.
 pub fn embed_types_round_trip_test() {
   let table = [
     #("rich", embed.Rich),
@@ -152,13 +151,13 @@ pub fn embed_types_round_trip_test() {
     #("link", embed.Link),
     #("poll_result", embed.PollResult),
     #("auto_moderation_message", embed.AutoModerationMessage),
-    #("mystery", embed.UnknownEmbedType("mystery")),
   ]
   list.each(table, fn(row) {
     let #(text, value) = row
-    assert embed.embed_type_from_string(text) == value
+    assert embed.embed_type_from_string(text) == Some(value)
     assert embed.embed_type_to_string(value) == text
   })
+  assert embed.embed_type_from_string("mystery") == None
 }
 
 /// Discord omits `inline` rather than sending false.

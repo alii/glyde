@@ -9,7 +9,7 @@
 import gleam/dynamic/decode.{type Decoder}
 import gleam/json.{type Json}
 import gleam/list
-import gleam/option.{type Option, None}
+import gleam/option.{type Option, None, Some}
 import glyde/field.{type Field, Absent, Present}
 import glyde/flags.{type Flags}
 import glyde/id
@@ -64,7 +64,7 @@ pub type Channel {
     /// interaction's resolved data and nowhere else. The bot's own are
     /// `app_permissions` on `interaction.Interaction`, a key of the
     /// interaction rather than of any channel in it.
-    permissions: Option(permissions.Permissions),
+    permissions: Option(permissions.Effective),
     /// `None` on the shapes that drop the key, an interaction's partial
     /// included. Defaulting it to 0 would let a cache merge clear flags
     /// nobody cleared, and an edit sends that back.
@@ -78,7 +78,8 @@ pub type Channel {
 }
 
 /// Live values are 0 to 5, 10 to 13, 15 and 16. 14 is hub-only, and 6 to 9
-/// were withdrawn but can still turn up in cached data.
+/// were withdrawn but can still turn up in cached data. A value this build has
+/// no name for fails the decode.
 pub type ChannelType {
   GuildText
   Dm
@@ -93,28 +94,29 @@ pub type ChannelType {
   GuildDirectory
   GuildForum
   GuildMedia
-  UnknownChannelType(Int)
 }
 
+/// A value this build has no name for is dropped from `permission_overwrites`,
+/// so it is never applied to the wrong kind of id.
 pub type OverwriteType {
   RoleOverwrite
   MemberOverwrite
-  UnknownOverwriteType(Int)
 }
 
+/// A value this build has no name for decodes as `None`.
 pub type VideoQualityMode {
   AutoQuality
   FullQuality
-  UnknownVideoQualityMode(Int)
 }
 
-/// Minute values, not an ordinal: 60, 1440, 4320, 10080.
+/// Minute values, not an ordinal: 60, 1440, 4320, 10080. A value this build
+/// has no name for fails the decode on `ThreadMetadata`, and yields `None` on
+/// `Channel.default_auto_archive_duration` where the field is optional.
 pub type ThreadAutoArchiveDuration {
   OneHour
   OneDay
   ThreeDays
   OneWeek
-  UnknownAutoArchiveDuration(Int)
 }
 
 /// `id` is a role id or a user id, and only `type_` says which. Read it
@@ -200,8 +202,6 @@ fn channel_flag_bit(flag: ChannelFlag) -> Int {
 
 pub const no_channel_flags: ChannelFlags = flags.none
 
-/// Build the `flags` an edit sends. Anything decoded off the wire should be
-/// edited with `with_flag` instead, so bits this build cannot name survive.
 pub fn channel_flags(of chosen: List(ChannelFlag)) -> ChannelFlags {
   list.fold(chosen, no_channel_flags, with_flag)
 }
@@ -218,11 +218,9 @@ pub fn without_flag(bits: ChannelFlags, flag: ChannelFlag) -> ChannelFlags {
   flags.clear_bit(bits, channel_flag_bit(flag))
 }
 
-// The type is the whole answer, so these take it rather than a `Channel`:
-// a THREAD_DELETE payload and an interaction's partial both have one.
-//
-// An unknown type answers False in every predicate below: a guess costs a 400
-// that reads like a permissions bug.
+// The type field is the whole answer, so these take it rather than a
+// `Channel`: a THREAD_DELETE payload and an interaction's partial both have
+// one.
 
 pub fn is_thread(type_: ChannelType) -> Bool {
   case type_ {
@@ -269,40 +267,36 @@ pub fn is_thread_only(type_: ChannelType) -> Bool {
   }
 }
 
-/// Who an overwrite applies to. Three cases, not two `Option`s: a type Discord
-/// adds after this build is neither a role nor a member, and treating it as
-/// either grants or denies the wrong people.
+/// Who an overwrite applies to. Two cases, because an overwrite whose type
+/// this build has no name for is dropped at decode time.
 pub type OverwriteTarget {
   RoleTarget(id.RoleId)
   MemberTarget(id.UserId)
-  /// The raw `type`, so a caller can recognise one this build cannot name.
-  UnknownTarget(id.OverwriteId, Int)
 }
 
 pub fn overwrite_target(overwrite: PermissionOverwrite) -> OverwriteTarget {
   case overwrite.type_ {
     RoleOverwrite -> RoleTarget(id.retag(overwrite.id, to: id.role))
     MemberOverwrite -> MemberTarget(id.retag(overwrite.id, to: id.user))
-    UnknownOverwriteType(raw) -> UnknownTarget(overwrite.id, raw)
   }
 }
 
-pub fn channel_type_from_int(value: Int) -> ChannelType {
+pub fn channel_type_from_int(value: Int) -> Option(ChannelType) {
   case value {
-    0 -> GuildText
-    1 -> Dm
-    2 -> GuildVoice
-    3 -> GroupDm
-    4 -> GuildCategory
-    5 -> GuildAnnouncement
-    10 -> AnnouncementThread
-    11 -> PublicThread
-    12 -> PrivateThread
-    13 -> GuildStageVoice
-    14 -> GuildDirectory
-    15 -> GuildForum
-    16 -> GuildMedia
-    other -> UnknownChannelType(other)
+    0 -> Some(GuildText)
+    1 -> Some(Dm)
+    2 -> Some(GuildVoice)
+    3 -> Some(GroupDm)
+    4 -> Some(GuildCategory)
+    5 -> Some(GuildAnnouncement)
+    10 -> Some(AnnouncementThread)
+    11 -> Some(PublicThread)
+    12 -> Some(PrivateThread)
+    13 -> Some(GuildStageVoice)
+    14 -> Some(GuildDirectory)
+    15 -> Some(GuildForum)
+    16 -> Some(GuildMedia)
+    _ -> None
   }
 }
 
@@ -321,11 +315,10 @@ pub fn channel_type_to_int(value: ChannelType) -> Int {
     GuildDirectory -> 14
     GuildForum -> 15
     GuildMedia -> 16
-    UnknownChannelType(other) -> other
   }
 }
 
-pub fn channel_type_decoder() -> Decoder(ChannelType) {
+pub fn channel_type_decoder() -> Decoder(Option(ChannelType)) {
   wire.integer() |> decode.map(channel_type_from_int)
 }
 
@@ -333,11 +326,11 @@ pub fn channel_type_to_json(value: ChannelType) -> Json {
   json.int(channel_type_to_int(value))
 }
 
-pub fn overwrite_type_from_int(value: Int) -> OverwriteType {
+pub fn overwrite_type_from_int(value: Int) -> Option(OverwriteType) {
   case value {
-    0 -> RoleOverwrite
-    1 -> MemberOverwrite
-    other -> UnknownOverwriteType(other)
+    0 -> Some(RoleOverwrite)
+    1 -> Some(MemberOverwrite)
+    _ -> None
   }
 }
 
@@ -345,11 +338,10 @@ pub fn overwrite_type_to_int(value: OverwriteType) -> Int {
   case value {
     RoleOverwrite -> 0
     MemberOverwrite -> 1
-    UnknownOverwriteType(other) -> other
   }
 }
 
-pub fn overwrite_type_decoder() -> Decoder(OverwriteType) {
+pub fn overwrite_type_decoder() -> Decoder(Option(OverwriteType)) {
   wire.integer() |> decode.map(overwrite_type_from_int)
 }
 
@@ -357,11 +349,11 @@ pub fn overwrite_type_to_json(value: OverwriteType) -> Json {
   json.int(overwrite_type_to_int(value))
 }
 
-pub fn video_quality_mode_from_int(value: Int) -> VideoQualityMode {
+pub fn video_quality_mode_from_int(value: Int) -> Option(VideoQualityMode) {
   case value {
-    1 -> AutoQuality
-    2 -> FullQuality
-    other -> UnknownVideoQualityMode(other)
+    1 -> Some(AutoQuality)
+    2 -> Some(FullQuality)
+    _ -> None
   }
 }
 
@@ -369,25 +361,22 @@ pub fn video_quality_mode_to_int(value: VideoQualityMode) -> Int {
   case value {
     AutoQuality -> 1
     FullQuality -> 2
-    UnknownVideoQualityMode(other) -> other
   }
-}
-
-pub fn video_quality_mode_decoder() -> Decoder(VideoQualityMode) {
-  wire.integer() |> decode.map(video_quality_mode_from_int)
 }
 
 pub fn video_quality_mode_to_json(value: VideoQualityMode) -> Json {
   json.int(video_quality_mode_to_int(value))
 }
 
-pub fn auto_archive_duration_from_int(value: Int) -> ThreadAutoArchiveDuration {
+pub fn auto_archive_duration_from_int(
+  value: Int,
+) -> Option(ThreadAutoArchiveDuration) {
   case value {
-    60 -> OneHour
-    1440 -> OneDay
-    4320 -> ThreeDays
-    10_080 -> OneWeek
-    other -> UnknownAutoArchiveDuration(other)
+    60 -> Some(OneHour)
+    1440 -> Some(OneDay)
+    4320 -> Some(ThreeDays)
+    10_080 -> Some(OneWeek)
+    _ -> None
   }
 }
 
@@ -397,40 +386,33 @@ pub fn auto_archive_duration_to_int(value: ThreadAutoArchiveDuration) -> Int {
     OneDay -> 1440
     ThreeDays -> 4320
     OneWeek -> 10_080
-    UnknownAutoArchiveDuration(other) -> other
   }
-}
-
-pub fn auto_archive_duration_decoder() -> Decoder(ThreadAutoArchiveDuration) {
-  wire.integer() |> decode.map(auto_archive_duration_from_int)
 }
 
 pub fn auto_archive_duration_to_json(value: ThreadAutoArchiveDuration) -> Json {
   json.int(auto_archive_duration_to_int(value))
 }
 
-pub fn permission_overwrite_decoder() -> Decoder(PermissionOverwrite) {
+/// An overwrite whose type this build has no name for yields `None`, so
+/// `permission_overwrites` holds only entries it can classify.
+pub fn permission_overwrite_decoder() -> Decoder(Option(PermissionOverwrite)) {
   use id <- decode.field("id", id.decoder())
   use type_ <- decode.field("type", overwrite_type_decoder())
   use allow <- decode.field("allow", permissions.decoder())
   use deny <- decode.field("deny", permissions.decoder())
-  decode.success(PermissionOverwrite(id:, type_:, allow:, deny:))
-}
-
-pub fn permission_overwrite_to_json(overwrite: PermissionOverwrite) -> Json {
-  json.object([
-    #("id", id.to_json(overwrite.id)),
-    #("type", overwrite_type_to_json(overwrite.type_)),
-    #("allow", permissions.to_json(overwrite.allow)),
-    #("deny", permissions.to_json(overwrite.deny)),
-  ])
+  decode.success(case type_ {
+    Some(type_) -> Some(PermissionOverwrite(id:, type_:, allow:, deny:))
+    None -> None
+  })
 }
 
 pub fn thread_metadata_decoder() -> Decoder(ThreadMetadata) {
   use archived <- wire.flag_field("archived", False)
-  use auto_archive_duration <- wire.opt_field(
+  use auto_archive_duration <- wire.type_field(
     "auto_archive_duration",
-    auto_archive_duration_decoder(),
+    auto_archive_duration_from_int,
+    OneDay,
+    "ThreadAutoArchiveDuration",
   )
   use archive_timestamp <- wire.string_field("archive_timestamp", "")
   use locked <- wire.flag_field("locked", False)
@@ -438,8 +420,7 @@ pub fn thread_metadata_decoder() -> Decoder(ThreadMetadata) {
   use create_timestamp <- wire.opt_field("create_timestamp", decode.string)
   decode.success(ThreadMetadata(
     archived:,
-    // Discord's own default for a thread that never set one.
-    auto_archive_duration: option.unwrap(auto_archive_duration, OneDay),
+    auto_archive_duration:,
     archive_timestamp:,
     locked:,
     invitable:,
@@ -458,12 +439,17 @@ pub fn thread_member_decoder() -> Decoder(ThreadMember) {
 
 pub fn decoder() -> Decoder(Channel) {
   use id <- decode.field("id", id.decoder())
-  use type_ <- decode.field("type", channel_type_decoder())
+  use type_ <- wire.type_field(
+    "type",
+    channel_type_from_int,
+    GuildText,
+    "ChannelType",
+  )
   use guild_id <- wire.opt_field("guild_id", id.decoder())
   use position <- wire.opt_field("position", wire.integer())
   use permission_overwrites <- wire.opt_field(
     "permission_overwrites",
-    decode.list(permission_overwrite_decoder()),
+    decode.list(permission_overwrite_decoder()) |> decode.map(option.values),
   )
   use name <- wire.opt_field("name", decode.string)
   use topic <- wire.opt_field("topic", decode.string)
@@ -483,9 +469,9 @@ pub fn decoder() -> Decoder(Channel) {
   use parent_id <- wire.opt_field("parent_id", id.decoder())
   use last_pin_timestamp <- wire.opt_field("last_pin_timestamp", decode.string)
   use rtc_region <- wire.opt_field("rtc_region", decode.string)
-  use video_quality_mode <- wire.opt_field(
+  use video_quality_mode <- wire.known_field(
     "video_quality_mode",
-    video_quality_mode_decoder(),
+    video_quality_mode_from_int,
   )
   use message_count <- wire.opt_field("message_count", wire.integer())
   use member_count <- wire.opt_field("member_count", wire.integer())
@@ -494,11 +480,14 @@ pub fn decoder() -> Decoder(Channel) {
     thread_metadata_decoder(),
   )
   use member <- wire.opt_field("member", thread_member_decoder())
-  use default_auto_archive_duration <- wire.opt_field(
+  use default_auto_archive_duration <- wire.known_field(
     "default_auto_archive_duration",
-    auto_archive_duration_decoder(),
+    auto_archive_duration_from_int,
   )
-  use permissions <- wire.opt_field("permissions", permissions.decoder())
+  use permissions <- wire.opt_field(
+    "permissions",
+    permissions.effective_decoder(),
+  )
   use channel_flags <- wire.opt_field("flags", flags.decoder())
   use total_message_sent <- wire.opt_field("total_message_sent", wire.integer())
   use default_thread_rate_limit_per_user <- wire.opt_field(
@@ -647,22 +636,13 @@ pub fn member_overwrite(user: id.UserId) -> OverwriteBody {
 /// `permission_overwrites` replaces the whole array, so an edit that changes
 /// one entry has to send the others back with it, and they arrive as
 /// `PermissionOverwrite`.
-///
-/// `Error` carries the number Discord sent for a type this build does not
-/// know: echoing it back would tell Discord the id means something else.
-pub fn overwrite_from(
-  overwrite: PermissionOverwrite,
-) -> Result(OverwriteBody, Int) {
-  case overwrite.type_ {
-    RoleOverwrite | MemberOverwrite ->
-      Ok(OverwriteBody(
-        id: overwrite.id,
-        type_: overwrite.type_,
-        allow: overwrite.allow,
-        deny: overwrite.deny,
-      ))
-    UnknownOverwriteType(raw) -> Error(raw)
-  }
+pub fn overwrite_from(overwrite: PermissionOverwrite) -> OverwriteBody {
+  OverwriteBody(
+    id: overwrite.id,
+    type_: overwrite.type_,
+    allow: overwrite.allow,
+    deny: overwrite.deny,
+  )
 }
 
 /// The complete allowed set, not an addition to what is already there.
@@ -707,7 +687,7 @@ pub type CreateChannel {
   CreateChannel(
     /// 1 to 100 characters.
     name: String,
-    /// Discord defaults this to a text 
+    /// Discord defaults this to a text channel.
     type_: Option(CreatableChannelType),
     topic: Option(String),
     bitrate: Option(Int),
@@ -723,9 +703,9 @@ pub type CreateChannel {
     /// Minutes.
     default_auto_archive_duration: Option(ThreadAutoArchiveDuration),
     default_thread_rate_limit_per_user: Option(Int),
-    /// The complete set, not an addition: Discord reads `flags` as the whole
-    /// bitfield, so a flag left out of the list is off.
-    flags: Option(List(ChannelFlag)),
+    /// Setting either sends `flags` and so decides both bits at once.
+    require_tag: Option(Bool),
+    hide_media_download_options: Option(Bool),
   )
 }
 
@@ -745,7 +725,8 @@ pub fn create_channel(name: String) -> CreateChannel {
     video_quality_mode: None,
     default_auto_archive_duration: None,
     default_thread_rate_limit_per_user: None,
-    flags: None,
+    require_tag: None,
+    hide_media_download_options: None,
   )
 }
 
@@ -775,12 +756,18 @@ pub fn create_channel_body(payload: CreateChannel) -> Body {
         "default_thread_rate_limit_per_user",
         seconds(wire.opt(payload.default_thread_rate_limit_per_user)),
       ),
-      #("flags", wire.put(wire.opt(payload.flags), settable_flags_to_json)),
+      #(
+        "flags",
+        settable_flags_field(
+          payload.require_tag,
+          payload.hide_media_download_options,
+        ),
+      ),
     ]),
   )
 }
 
-/// `PATCH /channels/{id}` for a guild  Group DM edits are out of v1.
+/// `PATCH /channels/{id}` for a guild channel. Group DM edits are out of v1.
 pub type EditGuildChannel {
   EditGuildChannel(
     name: Option(String),
@@ -801,9 +788,9 @@ pub type EditGuildChannel {
     video_quality_mode: Field(VideoQualityMode),
     default_auto_archive_duration: Field(ThreadAutoArchiveDuration),
     default_thread_rate_limit_per_user: Option(Int),
-    /// The complete set, not an addition: Discord reads `flags` as the whole
-    /// bitfield, so a flag left out of the list is off.
-    flags: Option(List(ChannelFlag)),
+    /// Setting either sends `flags` and so decides both bits at once.
+    require_tag: Option(Bool),
+    hide_media_download_options: Option(Bool),
   )
 }
 
@@ -823,7 +810,8 @@ pub fn edit_guild_channel() -> EditGuildChannel {
     video_quality_mode: Absent,
     default_auto_archive_duration: Absent,
     default_thread_rate_limit_per_user: None,
-    flags: None,
+    require_tag: None,
+    hide_media_download_options: None,
   )
 }
 
@@ -850,7 +838,13 @@ pub fn edit_guild_channel_body(payload: EditGuildChannel) -> Body {
         "default_thread_rate_limit_per_user",
         seconds(wire.opt(payload.default_thread_rate_limit_per_user)),
       ),
-      #("flags", wire.put(wire.opt(payload.flags), settable_flags_to_json)),
+      #(
+        "flags",
+        settable_flags_field(
+          payload.require_tag,
+          payload.hide_media_download_options,
+        ),
+      ),
     ]),
   )
 }
@@ -942,13 +936,29 @@ pub fn create_thread_from_message_body(
   )
 }
 
+/// The three thread types Discord's start-thread endpoints accept. Any other
+/// `ChannelType` sent as `type` is a 400.
+pub type ThreadKind {
+  AsPublicThread
+  AsPrivateThread
+  AsAnnouncementThread
+}
+
+fn thread_kind_int(kind: ThreadKind) -> Int {
+  case kind {
+    AsAnnouncementThread -> 10
+    AsPublicThread -> 11
+    AsPrivateThread -> 12
+  }
+}
+
 /// `POST /channels/{c}/threads`. `type_` is required rather than optional:
 /// leaving it out gets a private thread today, and Discord has said that
 /// default will change.
 pub type CreateThread {
   CreateThread(
     name: String,
-    type_: ChannelType,
+    type_: ThreadKind,
     auto_archive_duration: Option(ThreadAutoArchiveDuration),
     /// Private threads only.
     invitable: Option(Bool),
@@ -956,7 +966,7 @@ pub type CreateThread {
   )
 }
 
-pub fn create_thread(name: String, type_: ChannelType) -> CreateThread {
+pub fn create_thread(name: String, type_: ThreadKind) -> CreateThread {
   CreateThread(
     name: name,
     type_: type_,
@@ -970,7 +980,7 @@ pub fn create_thread_body(payload: CreateThread) -> Body {
   body.json(
     wire.entries([
       #("name", Present(json.string(payload.name))),
-      #("type", Present(channel_type_to_json(payload.type_))),
+      #("type", Present(json.int(thread_kind_int(payload.type_)))),
       #(
         "auto_archive_duration",
         archive(wire.opt(payload.auto_archive_duration)),
@@ -1017,18 +1027,26 @@ fn conversion_to_json(value: ChannelConversion) -> Json {
   })
 }
 
-/// Only `RequireTag` and `HideMediaDownloadOptions` can be set on a create or
-/// an edit; the read-only bits are stripped so an edit that round-trips flags
-/// off a received channel does not send `PINNED` back.
-fn settable_flags_to_json(chosen: List(ChannelFlag)) -> Json {
-  let settable =
-    list.filter(chosen, fn(flag) {
-      case flag {
-        RequireTag | HideMediaDownloadOptions -> True
-        Pinned | IsSpoilerChannel -> False
+/// Only `RequireTag` and `HideMediaDownloadOptions` are settable on a create
+/// or edit, so the request carries them by name and never a `ChannelFlag` list.
+fn settable_flags_field(
+  require_tag: Option(Bool),
+  hide_media_download_options: Option(Bool),
+) -> Field(Json) {
+  case require_tag, hide_media_download_options {
+    None, None -> Absent
+    _, _ -> {
+      let built = case require_tag == option.Some(True) {
+        True -> with_flag(no_channel_flags, RequireTag)
+        False -> no_channel_flags
       }
-    })
-  flags.to_json(channel_flags(of: settable))
+      let built = case hide_media_download_options == option.Some(True) {
+        True -> with_flag(built, HideMediaDownloadOptions)
+        False -> built
+      }
+      Present(flags.to_json(built))
+    }
+  }
 }
 
 /// PINNED on its own, or an empty bitfield to unpin.

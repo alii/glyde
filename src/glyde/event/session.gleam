@@ -1,10 +1,9 @@
 //// The session's own dispatches. READY decodes in `glyde/ready` and RESUMED
 //// carries nothing, which leaves RATE_LIMITED.
 
-import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode.{type Decoder}
 import gleam/float
-import gleam/option.{type Option}
+import gleam/option.{type Option, None, Some}
 import glyde/id
 import glyde/wire
 
@@ -17,17 +16,16 @@ pub type RateLimited {
     /// SECONDS, fractional, and a bare `30` when the value is whole.
     /// `retry_after_ms` is usually what you want.
     retry_after: Float,
-    meta: RateLimitMeta,
+    /// `None` for any opcode this build has no meta shape for, and for a
+    /// missing `meta` key.
+    meta: Option(RateLimitMeta),
   )
 }
 
-/// Keyed by opcode, and open. Only opcode 8's shape is documented, and `meta`
-/// can be missing altogether.
+/// Keyed by opcode. Only opcode 8's shape is documented; a value this build
+/// has no shape for decodes as `None`.
 pub type RateLimitMeta {
   MemberRequestMeta(guild_id: id.GuildId, nonce: Option(String))
-  /// Any other opcode, and any opcode 8 whose meta had no `guild_id`. `raw` is
-  /// the meta object as sent, or null when there was none.
-  UnknownMeta(opcode: Int, raw: Dynamic)
 }
 
 /// `retry_after` in milliseconds, never negative: "retry now" is the only
@@ -45,20 +43,16 @@ pub fn retry_after_ms(limited: RateLimited) -> Int {
 pub fn rate_limited_decoder() -> Decoder(RateLimited) {
   use opcode <- decode.field("opcode", wire.integer())
   use retry_after <- decode.field("retry_after", wire.number())
-  use meta <- decode.optional_field("meta", dynamic.nil(), decode.dynamic)
-  decode.success(RateLimited(
-    opcode:,
-    retry_after:,
-    meta: rate_limit_meta(opcode, meta),
-  ))
+  use meta <- wire.soft_field("meta", meta_decoder(opcode))
+  decode.success(RateLimited(opcode:, retry_after:, meta: option.flatten(meta)))
 }
 
 /// Opcode 8 is the only meta shape Discord documents. Anything else, a
-/// missing meta included, keeps the raw object rather than guessing.
-fn rate_limit_meta(opcode: Int, raw: Dynamic) -> RateLimitMeta {
-  case opcode, decode.run(raw, member_request_meta_decoder()) {
-    8, Ok(meta) -> meta
-    _, _ -> UnknownMeta(opcode:, raw:)
+/// missing meta included, gives `None`.
+fn meta_decoder(opcode: Int) -> Decoder(Option(RateLimitMeta)) {
+  case opcode {
+    8 -> member_request_meta_decoder() |> decode.map(Some)
+    _ -> decode.success(None)
   }
 }
 

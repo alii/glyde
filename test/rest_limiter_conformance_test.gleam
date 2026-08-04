@@ -5,9 +5,10 @@ import gleam/http
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
-import glyde/rest/headers.{Learned, Opaque, Rejected, Throttled}
+import glyde/rest/headers
 import glyde/rest/limiter.{
-  Counters, GlobalScope, Send, SharedScope, Submit, Ticket, UserScope,
+  Counters, GlobalScope, Learned, Opaque, Rejected, Send, SharedScope, Submit,
+  Throttled, Ticket, UserScope,
 }
 import glyde/rest/route
 import glyde/rest/seg
@@ -225,8 +226,8 @@ pub fn a_headerless_429_is_not_a_user_limit_test() {
 
 /// 401 and 403 spend the budget that ends in an IP-wide ban.
 pub fn status_401_and_403_are_reported_as_rejections_test() {
-  assert headers.outcome(401, [], "") == Rejected(headers.Unauthorized)
-  assert headers.outcome(403, [], "") == Rejected(headers.Forbidden)
+  assert headers.outcome(401, [], "") == Rejected(limiter.Unauthorized)
+  assert headers.outcome(403, [], "") == Rejected(limiter.Forbidden)
 }
 
 /// Counting a 404 would exhaust the budget on ordinary missing-resource
@@ -395,11 +396,11 @@ pub fn a_bucket_less_response_still_gates_the_next_call_test() {
       now_ms: 0,
       input: limiter.Settled(
         Ticket(1),
-        headers.to_limiter_outcome(headers.outcome(
+        headers.outcome(
           200,
           [#("x-ratelimit-remaining", "0"), #("x-ratelimit-reset-after", "30")],
           "",
-        )),
+        ),
       ),
     )
 
@@ -417,10 +418,7 @@ pub fn a_counter_less_response_does_not_reopen_a_closed_bucket_test() {
       limiter.step(
         state,
         now_ms: at,
-        input: limiter.Settled(
-          ticket,
-          headers.to_limiter_outcome(headers.outcome(200, sent, "")),
-        ),
+        input: limiter.Settled(ticket, headers.outcome(200, sent, "")),
       )
     state
   }

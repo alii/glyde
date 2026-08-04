@@ -26,7 +26,6 @@ pub fn a_refused_upgrade_hands_over_its_status_test() {
     == Error(Nil)
   assert erlang.refusal_status(erlang.ConnectFailed("econnrefused"))
     == Error(Nil)
-  assert erlang.refusal_status(erlang.Closed) == Error(Nil)
 }
 
 pub fn error_to_string_names_the_problem_test() {
@@ -62,22 +61,29 @@ pub fn error_to_string_names_the_problem_test() {
     == "handshake failed: response head is not text"
   assert erlang.error_to_string(erlang.HeadTooLong(8192))
     == "handshake failed: response head never ended in 8192 bytes"
-  assert erlang.error_to_string(erlang.SocketFailed(erlang.TimedOut))
+}
+
+pub fn live_error_to_string_names_the_problem_test() {
+  assert erlang.live_error_to_string(erlang.SocketFailed(erlang.TimedOut))
     == "socket failed: timed out"
-  assert erlang.error_to_string(erlang.SocketFailed(erlang.Broke("closed")))
+  assert erlang.live_error_to_string(
+      erlang.SocketFailed(erlang.Broke("closed")),
+    )
     == "socket failed: closed"
-  assert erlang.error_to_string(
+  assert erlang.live_error_to_string(
       erlang.SocketFailed(erlang.Crashed("error: badarg at {ssl,send,2,[]}")),
     )
     == "socket failed: ssl raised error: badarg at {ssl,send,2,[]}"
-  assert erlang.error_to_string(erlang.Closed) == "connection closed"
-  assert erlang.error_to_string(erlang.ProtocolFailed(frame.ReservedBitsSet))
+  assert erlang.live_error_to_string(erlang.Closed) == "connection closed"
+  assert erlang.live_error_to_string(erlang.ProtocolFailed(
+      frame.ReservedBitsSet,
+    ))
     == "protocol violated: reserved bits set"
-  assert erlang.error_to_string(
+  assert erlang.live_error_to_string(
       erlang.ProtocolFailed(frame.ControlPayloadTooLarge(126)),
     )
     == "protocol violated: control frame payload over 125 bytes, declared 126"
-  assert erlang.error_to_string(erlang.BufferFull(4096))
+  assert erlang.live_error_to_string(erlang.BufferFull(4096))
     == "buffer full at 4096 bytes with no message in it"
 }
 

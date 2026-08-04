@@ -4,10 +4,10 @@ import gleam/option.{None, Some}
 import glyde/gateway/frame
 import glyde/gateway/ready
 import glyde/id
-import glyde/internal/url
+import glyde/internal/host
 
-fn host(text: String) -> url.Host {
-  let assert Ok(host) = url.host_of(text)
+fn host(text: String) -> host.Host {
+  let assert Ok(host) = host.host_of(text)
   host
 }
 
@@ -145,6 +145,17 @@ pub fn a_resume_url_with_no_host_still_reads_test() {
     assert payload.resume_host == None
     assert payload.session_id == "abc"
   })
+  // Absent, null, and wrong-type all read as hostless: the session is kept.
+  let table = [
+    "{\"session_id\":\"abc\",\"user\":{\"id\":\"7\"}}",
+    "{\"session_id\":\"abc\",\"resume_gateway_url\":null,\"user\":{\"id\":\"7\"}}",
+    "{\"session_id\":\"abc\",\"resume_gateway_url\":123,\"user\":{\"id\":\"7\"}}",
+  ]
+  list.each(table, fn(body) {
+    let assert Ok(payload) = ready_of(body)
+    assert payload.resume_host == None
+    assert payload.session_id == "abc"
+  })
 }
 
 /// Which fields were missing decides what the shard says about it, so the
@@ -153,7 +164,6 @@ pub fn ready_failures_test() {
   let table = [
     "{}",
     "{\"resume_gateway_url\":\"wss://h.discord.gg\",\"user\":{\"id\":\"7\"}}",
-    "{\"session_id\":\"abc\",\"user\":{\"id\":\"7\"}}",
     "{\"session_id\":\"abc\",\"resume_gateway_url\":\"wss://h.discord.gg\"}",
     "{\"session_id\":\"abc\",\"resume_gateway_url\":\"wss://h.discord.gg\","
       <> "\"user\":{}}",

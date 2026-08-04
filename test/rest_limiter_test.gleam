@@ -85,7 +85,7 @@ fn learned(
   remaining: Int,
   reset_after: String,
 ) -> limiter.Outcome {
-  headers.to_limiter_outcome(headers.outcome(
+  headers.outcome(
     200,
     [
       #("x-ratelimit-bucket", bucket),
@@ -94,11 +94,11 @@ fn learned(
       #("x-ratelimit-reset-after", reset_after),
     ],
     "",
-  ))
+  )
 }
 
 fn throttled(scope: String, bucket: String, retry: String) -> limiter.Outcome {
-  headers.to_limiter_outcome(headers.outcome(
+  headers.outcome(
     429,
     [
       #("retry-after", retry),
@@ -106,11 +106,11 @@ fn throttled(scope: String, bucket: String, retry: String) -> limiter.Outcome {
       #("x-ratelimit-bucket", bucket),
     ],
     "",
-  ))
+  )
 }
 
 fn global_429(retry: String) -> limiter.Outcome {
-  headers.to_limiter_outcome(headers.outcome(
+  headers.outcome(
     429,
     [
       #("retry-after", retry),
@@ -118,12 +118,12 @@ fn global_429(retry: String) -> limiter.Outcome {
       #("x-ratelimit-global", "true"),
     ],
     "",
-  ))
+  )
 }
 
 /// A response carrying no rate-limit headers at all.
 fn bare(status: Int) -> limiter.Outcome {
-  headers.to_limiter_outcome(headers.outcome(status, [], ""))
+  headers.outcome(status, [], "")
 }
 
 // Three calls on a cold route, an answer naming a hash that is already live
@@ -393,7 +393,7 @@ pub fn shared_throttle_is_not_an_invalid_request_test() {
       Step(0, Submit(Ticket(1), route), [Send(Ticket(1))]),
       Step(1, Settled(Ticket(1), throttled("shared", "h", "2")), [
         Note(BucketLearned(key, "h")),
-        Note(limiter.SharedThrottle("h", 2000)),
+        Note(limiter.SharedThrottle(Some("h"), 2000)),
       ]),
       // Budget untouched, so a different bucket still sends.
       Step(2, Submit(Ticket(2), messages(channel_b)), [Send(Ticket(2))]),
@@ -525,7 +525,7 @@ pub fn a_429_on_an_empty_bucket_extends_the_reset_test() {
 pub fn a_limit_of_zero_is_exhaustion_test() {
   let route = messages(channel_a)
   let outcome =
-    headers.to_limiter_outcome(headers.outcome(
+    headers.outcome(
       200,
       [
         #("x-ratelimit-bucket", "h"),
@@ -534,7 +534,7 @@ pub fn a_limit_of_zero_is_exhaustion_test() {
         #("x-ratelimit-reset-after", "30"),
       ],
       "",
-    ))
+    )
   let #(_, _) =
     run(limiter.new(limiter.defaults()), [
       Step(0, Submit(Ticket(1), route), [Send(Ticket(1))]),

@@ -5,11 +5,12 @@
 //// command (2) and autocomplete (4) send identical objects, so shape sniffing
 //// answers an autocomplete keystroke with a message per letter.
 ////
-//// The decode is all or nothing, so every enum has an unknown tail. A PING
-//// carries five keys, which is why most "required" fields are optional here.
+//// A `type` this build has no name for fails the decode, so it reaches
+//// `on_status` as `Undecodable` rather than the handler as an `Option` to
+//// unwrap. A PING carries five keys, which is why most other "required"
+//// fields are optional here.
 
 import gleam/dict.{type Dict}
-import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import gleam/json.{type Json}
@@ -50,9 +51,8 @@ pub fn interaction_token(raw: String) -> InteractionToken {
   InteractionToken(fn() { raw })
 }
 
-/// The token as a path segment wants it. `glyde/interaction` is the only
-/// caller that needs this; anywhere else, it is a secret being taken out.
-pub fn reveal_token(token: InteractionToken) -> String {
+/// The token as a path segment wants it.
+fn reveal_token(token: InteractionToken) -> String {
   token.reveal()
 }
 
@@ -83,16 +83,13 @@ pub type Interaction {
     /// The message a component was attached to.
     message: Option(message.Message),
     /// What the APP may do here, not what the user may do. Absent on a PING.
-    app_permissions: Option(permissions.Permissions),
+    app_permissions: Option(permissions.Effective),
     locale: Option(String),
     guild_locale: Option(String),
     /// Who installed the app, one entry per install type it ran under. Empty
     /// on a PING. `authorizing_guild_id` and `authorizing_user_id` read it as
     /// typed ids.
-    authorizing_integration_owners: Dict(
-      application_command.ApplicationIntegrationType,
-      AuthorizingOwner,
-    ),
+    authorizing_integration_owners: Dict(IntegrationOwnerKey, AuthorizingOwner),
     context: Option(application_command.InteractionContextType),
     /// Bytes. Absent on a PING.
     attachment_size_limit: Option(Int),
@@ -102,6 +99,17 @@ pub type Interaction {
 /// Not a `Guild`: the guild decoder fails on these three fields.
 pub type InteractionGuild {
   InteractionGuild(id: id.GuildId, locale: String, features: List(String))
+}
+
+/// A key of `authorizing_integration_owners`, which arrives as a JSON object
+/// key: the string "0" or "1". Its own type rather than
+/// `ApplicationIntegrationType` so an unparseable key never reaches
+/// `integration_types` on a command create, where it would send garbage.
+pub type IntegrationOwnerKey {
+  KnownIntegration(application_command.ApplicationIntegrationType)
+  /// A key that was not a number at all. Keeps the raw text so two of them
+  /// stay two entries; one shared sentinel would drop every one but the last.
+  UnparsedIntegrationKey(String)
 }
 
 /// One entry of `authorizing_integration_owners`. A guild install invoked in
@@ -114,15 +122,15 @@ pub type AuthorizingOwner {
   NoOwner
 }
 
+/// A value this build has no name for fails the decode.
 pub type InteractionType {
   /// HTTP interactions only. Never arrives over the gateway.
   PingInteraction
   ApplicationCommandInteraction
   MessageComponentInteraction
   AutocompleteInteraction
-  /// Not modelled, so its data lands in `UnknownData(5, raw)`.
+  /// Its data is not modelled, so `data` decodes as `NoData`.
   ModalSubmitInteraction
-  UnknownInteractionType(Int)
 }
 
 pub type InteractionData {
@@ -156,17 +164,15 @@ pub type InteractionData {
   ComponentData(
     custom_id: String,
     /// What was submitted, tagged by the component that sent it. A button
-    /// press carries nothing, so there is no empty `values` to read.
-    submission: ComponentSubmission,
+    /// press carries nothing, so there is no empty `values` to read. `None`
+    /// for a component type this build does not model.
+    submission: Option(ComponentSubmission),
     resolved: ResolvedData,
   )
 
-  /// Type 1 (PING), and any future type that carries no `data` key.
+  /// Type 1 (PING) and type 5 (MODAL_SUBMIT). The envelope's id and token are
+  /// still there for a caller to answer "unsupported".
   NoData
-
-  /// Type 5 (MODAL_SUBMIT) today. Carries the envelope type and the undecoded
-  /// `data`, so a caller can hand-roll against it.
-  UnknownData(type_: Int, raw: Dynamic)
 }
 
 /// What the component sent back, one variant per `component_type`. Discord
@@ -181,22 +187,19 @@ pub type ComponentSubmission {
   UserSelect(users: List(id.UserId))
   /// Type 6.
   RoleSelect(roles: List(id.RoleId))
-  /// Type 7. Users and roles come back in one list.
+  /// Type 7. Users and roles come back in one list. An id in neither
+  /// `resolved` map is dropped, since nothing says which it is.
   MentionableSelect(mentions: List(Mentionable))
   /// Type 8.
   ChannelSelect(channels: List(id.ChannelId))
-  /// A component type this build does not know, with its `values` as sent.
-  UnknownSubmission(component_type: Int, values: List(String))
 }
 
 /// One pick from a mentionable select, which is the only component that can
-/// return a user and a role in the same list.
+/// return a user and a role in the same list. An id in neither `resolved` map
+/// is dropped from the list.
 pub type Mentionable {
   MentionedUser(id: id.UserId)
   MentionedRole(id: id.RoleId)
-  /// In neither `resolved` map, so nothing here says which it is. Tagging it
-  /// either way puts a role id on a route that takes a user.
-  UnknownMentionable(raw: String)
 }
 
 /// One parameter of an invoked command. Nests at most three deep: group,
@@ -204,7 +207,8 @@ pub type Mentionable {
 pub type InteractionOption {
   InteractionOption(
     name: String,
-    type_: application_command.ApplicationCommandOptionType,
+    /// `None` for a value this build has no name for.
+    type_: Option(application_command.ApplicationCommandOptionType),
     /// `NoValue` for subcommands and groups, which carry `options` instead,
     /// and for an autocomplete option not yet typed.
     value: OptionValue,
@@ -222,10 +226,9 @@ pub type OptionValue {
   IntValue(Int)
   FloatValue(Float)
   BoolValue(Bool)
-  /// The `value` key was absent.
+  /// The `value` key was absent, or was present and not a string, number or
+  /// bool.
   NoValue
-  /// Present, and not a string, number or bool.
-  UnknownValue(Dynamic)
 }
 
 /// Everything the user picked, already fetched. Absent maps decode to empty.
@@ -250,7 +253,7 @@ pub type ResolvedChannel {
     id: id.ChannelId,
     type_: channel.ChannelType,
     name: Option(String),
-    permissions: Option(permissions.Permissions),
+    permissions: Option(permissions.Effective),
     parent_id: Option(id.ChannelId),
     /// Present when the resolved channel is a thread.
     thread_metadata: Option(channel.ThreadMetadata),
@@ -286,7 +289,8 @@ pub type InteractionCallbackResource {
   )
 }
 
-/// The numbering skips 11, so never index this by position.
+/// The numbering skips 11, so never index this by position. A value this
+/// build has no name for fails the decode.
 pub type InteractionCallbackType {
   PongCallback
   ChannelMessageWithSourceCallback
@@ -299,17 +303,16 @@ pub type InteractionCallbackType {
   PremiumRequiredCallback
   /// Activities.
   LaunchActivityCallback
-  UnknownCallbackType(Int)
 }
 
-pub fn interaction_type_from_int(value: Int) -> InteractionType {
+pub fn interaction_type_from_int(value: Int) -> Option(InteractionType) {
   case value {
-    1 -> PingInteraction
-    2 -> ApplicationCommandInteraction
-    3 -> MessageComponentInteraction
-    4 -> AutocompleteInteraction
-    5 -> ModalSubmitInteraction
-    other -> UnknownInteractionType(other)
+    1 -> Some(PingInteraction)
+    2 -> Some(ApplicationCommandInteraction)
+    3 -> Some(MessageComponentInteraction)
+    4 -> Some(AutocompleteInteraction)
+    5 -> Some(ModalSubmitInteraction)
+    _ -> None
   }
 }
 
@@ -320,30 +323,29 @@ pub fn interaction_type_to_int(value: InteractionType) -> Int {
     MessageComponentInteraction -> 3
     AutocompleteInteraction -> 4
     ModalSubmitInteraction -> 5
-    UnknownInteractionType(other) -> other
   }
 }
 
 pub fn interaction_type_decoder() -> Decoder(InteractionType) {
-  wire.integer() |> decode.map(interaction_type_from_int)
+  wire.strict(interaction_type_from_int, PingInteraction, "InteractionType")
 }
 
 pub fn interaction_type_to_json(value: InteractionType) -> Json {
   json.int(interaction_type_to_int(value))
 }
 
-pub fn callback_type_from_int(value: Int) -> InteractionCallbackType {
+pub fn callback_type_from_int(value: Int) -> Option(InteractionCallbackType) {
   case value {
-    1 -> PongCallback
-    4 -> ChannelMessageWithSourceCallback
-    5 -> DeferredChannelMessageWithSourceCallback
-    6 -> DeferredUpdateMessageCallback
-    7 -> UpdateMessageCallback
-    8 -> AutocompleteResultCallback
-    9 -> ModalCallback
-    10 -> PremiumRequiredCallback
-    12 -> LaunchActivityCallback
-    other -> UnknownCallbackType(other)
+    1 -> Some(PongCallback)
+    4 -> Some(ChannelMessageWithSourceCallback)
+    5 -> Some(DeferredChannelMessageWithSourceCallback)
+    6 -> Some(DeferredUpdateMessageCallback)
+    7 -> Some(UpdateMessageCallback)
+    8 -> Some(AutocompleteResultCallback)
+    9 -> Some(ModalCallback)
+    10 -> Some(PremiumRequiredCallback)
+    12 -> Some(LaunchActivityCallback)
+    _ -> None
   }
 }
 
@@ -358,12 +360,11 @@ pub fn callback_type_to_int(value: InteractionCallbackType) -> Int {
     ModalCallback -> 9
     PremiumRequiredCallback -> 10
     LaunchActivityCallback -> 12
-    UnknownCallbackType(other) -> other
   }
 }
 
 pub fn callback_type_decoder() -> Decoder(InteractionCallbackType) {
-  wire.integer() |> decode.map(callback_type_from_int)
+  wire.strict(callback_type_from_int, PongCallback, "InteractionCallbackType")
 }
 
 pub fn callback_type_to_json(value: InteractionCallbackType) -> Json {
@@ -413,11 +414,32 @@ fn authorizing_owner_decoder() -> Decoder(AuthorizingOwner) {
   }
 }
 
+/// A key that is not a number, or is a number this build has no name for,
+/// keeps its text rather than failing the interaction: this decode is all or
+/// nothing.
+fn integration_owner_key_decoder() -> Decoder(IntegrationOwnerKey) {
+  use key <- decode.map(decode.string)
+  case
+    option.then(
+      option.from_result(int.parse(key)),
+      application_command.integration_type_from_int,
+    )
+  {
+    Some(value) -> KnownIntegration(value)
+    None -> UnparsedIntegrationKey(key)
+  }
+}
+
 fn authorizing_owner(
   interaction: Interaction,
   install: application_command.ApplicationIntegrationType,
 ) -> Option(id.Id(k)) {
-  case dict.get(interaction.authorizing_integration_owners, install) {
+  case
+    dict.get(
+      interaction.authorizing_integration_owners,
+      KnownIntegration(install),
+    )
+  {
     Ok(OwnedBy(owner)) -> Some(id.from_string(owner))
     _ -> None
   }
@@ -455,9 +477,14 @@ pub fn interaction_guild_decoder() -> Decoder(InteractionGuild) {
 
 pub fn resolved_channel_decoder() -> Decoder(ResolvedChannel) {
   use id <- decode.field("id", id.decoder())
-  use type_ <- decode.field("type", channel.channel_type_decoder())
+  use type_ <- wire.type_field(
+    "type",
+    channel.channel_type_from_int,
+    channel.GuildText,
+    "ChannelType",
+  )
   use name <- wire.opt_field("name", decode.string)
-  use perms <- wire.opt_field("permissions", permissions.decoder())
+  use perms <- wire.opt_field("permissions", permissions.effective_decoder())
   use parent_id <- wire.opt_field("parent_id", id.decoder())
   use thread_metadata <- wire.opt_field(
     "thread_metadata",
@@ -499,29 +526,29 @@ pub fn resolved_decoder() -> Decoder(ResolvedData) {
 }
 
 /// The declared type picks the variant, not the JSON shape. Discord validates
-/// numeric input client-side only, so every ladder ends in `UnknownValue`.
+/// numeric input client-side only, so every ladder ends in `NoValue`.
 fn option_value_decoder(
-  option_type: application_command.ApplicationCommandOptionType,
+  option_type: Option(application_command.ApplicationCommandOptionType),
 ) -> Decoder(OptionValue) {
   case option_type {
-    application_command.SubCommand | application_command.SubCommandGroup ->
-      decode.success(NoValue)
-    application_command.IntegerOption ->
+    Some(application_command.SubCommand)
+    | Some(application_command.SubCommandGroup) -> decode.success(NoValue)
+    Some(application_command.IntegerOption) ->
       decode.one_of(wire.integer() |> decode.map(IntValue), [
         wire.number() |> decode.map(FloatValue),
         decode.string |> decode.map(StringValue),
-        decode.dynamic |> decode.map(UnknownValue),
+        decode.success(NoValue),
       ])
-    application_command.BooleanOption ->
+    Some(application_command.BooleanOption) ->
       decode.one_of(decode.bool |> decode.map(BoolValue), [
         decode.string |> decode.map(StringValue),
-        decode.dynamic |> decode.map(UnknownValue),
+        decode.success(NoValue),
       ])
     // A whole NUMBER still lands as a Float, which is what was declared.
-    application_command.NumberOption ->
+    Some(application_command.NumberOption) ->
       decode.one_of(wire.number() |> decode.map(FloatValue), [
         decode.string |> decode.map(StringValue),
-        decode.dynamic |> decode.map(UnknownValue),
+        decode.success(NoValue),
       ])
     // STRING, the snowflake types, and anything this build does not know.
     _ ->
@@ -529,7 +556,7 @@ fn option_value_decoder(
         decode.bool |> decode.map(BoolValue),
         wire.integer() |> decode.map(IntValue),
         wire.number() |> decode.map(FloatValue),
-        decode.dynamic |> decode.map(UnknownValue),
+        decode.success(NoValue),
       ])
   }
 }
@@ -539,8 +566,6 @@ pub fn option_decoder() -> Decoder(InteractionOption) {
   use name <- decode.field("name", decode.string)
   use declared <- decode.field("type", wire.integer())
   let type_ = application_command.option_type_from_int(declared)
-  // Not `wire.defaulted_field`: this ladder already ends in `UnknownValue`,
-  // which takes a null too, and an explicit null is not the same as no value.
   use value <- decode.optional_field(
     "value",
     NoValue,
@@ -551,8 +576,8 @@ pub fn option_decoder() -> Decoder(InteractionOption) {
   decode.success(InteractionOption(name:, type_:, value:, options:, focused:))
 }
 
-/// The envelope's `type` picks the decoder. A type this build does not model
-/// keeps its number and its undecoded payload.
+/// The envelope's `type` picks the decoder. A type whose data this build does
+/// not model gives `NoData`, so the envelope's id and token are still there.
 pub fn data_decoder(
   interaction_type: InteractionType,
 ) -> Decoder(InteractionData) {
@@ -560,18 +585,18 @@ pub fn data_decoder(
     ApplicationCommandInteraction -> command_data_decoder()
     MessageComponentInteraction -> component_data_decoder()
     AutocompleteInteraction -> autocomplete_data_decoder()
-    other ->
-      decode.map(decode.dynamic, UnknownData(interaction_type_to_int(other), _))
+    PingInteraction | ModalSubmitInteraction -> decode.success(NoData)
   }
 }
 
 fn command_data_decoder() -> Decoder(InteractionData) {
   use id <- decode.field("id", id.decoder())
   use name <- wire.string_field("name", "")
-  use type_ <- wire.defaulted_field(
+  use type_ <- wire.type_or(
     "type",
-    application_command.command_type_decoder(),
+    application_command.command_type_from_int,
     application_command.ChatInput,
+    "ApplicationCommandType",
   )
   use resolved <- wire.defaulted_field(
     "resolved",
@@ -595,10 +620,11 @@ fn command_data_decoder() -> Decoder(InteractionData) {
 fn autocomplete_data_decoder() -> Decoder(InteractionData) {
   use id <- decode.field("id", id.decoder())
   use name <- wire.string_field("name", "")
-  use type_ <- wire.defaulted_field(
+  use type_ <- wire.type_or(
     "type",
-    application_command.command_type_decoder(),
+    application_command.command_type_from_int,
     application_command.ChatInput,
+    "ApplicationCommandType",
   )
   use options <- wire.list_field("options", option_decoder())
   use guild_id <- wire.opt_field("guild_id", id.decoder())
@@ -629,45 +655,45 @@ fn component_data_decoder() -> Decoder(InteractionData) {
 /// empty select and a button press send the same keys. The numbering is
 /// `glyde/component`'s, so there is one table of it.
 fn submission(
-  component_type: component.ComponentType,
+  component_type: Option(component.ComponentType),
   values: List(String),
   resolved: ResolvedData,
-) -> ComponentSubmission {
+) -> Option(ComponentSubmission) {
   case component_type {
-    component.ButtonType -> ButtonPress
-    component.StringSelectType -> StringSelect(values:)
-    component.UserSelectType ->
-      UserSelect(users: list.map(values, id.from_string))
-    component.RoleSelectType ->
-      RoleSelect(roles: list.map(values, id.from_string))
-    component.MentionableSelectType ->
-      MentionableSelect(
-        mentions: list.map(values, fn(raw) { mentionable(raw, resolved) }),
+    Some(component.ButtonType) -> Some(ButtonPress)
+    Some(component.StringSelectType) -> Some(StringSelect(values:))
+    Some(component.UserSelectType) ->
+      Some(UserSelect(users: list.map(values, id.from_string)))
+    Some(component.RoleSelectType) ->
+      Some(RoleSelect(roles: list.map(values, id.from_string)))
+    Some(component.MentionableSelectType) ->
+      Some(
+        MentionableSelect(
+          mentions: list.filter_map(values, fn(raw) {
+            option.to_result(mentionable(raw, resolved), Nil)
+          }),
+        ),
       )
-    component.ChannelSelectType ->
-      ChannelSelect(channels: list.map(values, id.from_string))
+    Some(component.ChannelSelectType) ->
+      Some(ChannelSelect(channels: list.map(values, id.from_string)))
     // An action row and a text input never submit an interaction, so they go
-    // the same way as a type this build has not seen.
-    other ->
-      UnknownSubmission(
-        component_type: component.component_type_to_int(other),
-        values:,
-      )
+    // the same way as a type this build has no name for.
+    Some(component.ActionRowType) | Some(component.TextInputType) | None -> None
   }
 }
 
 /// Only `resolved` tells a picked user from a picked role, and Discord fills
-/// it for every entity select. An id in neither map stays untagged rather
-/// than defaulting to a user: `user_option` refuses the same guess.
-fn mentionable(raw: String, resolved: ResolvedData) -> Mentionable {
+/// it for every entity select. An id in neither map is dropped rather than
+/// defaulting to a user: `user_option` refuses the same guess.
+fn mentionable(raw: String, resolved: ResolvedData) -> Option(Mentionable) {
   case
     dict.has_key(resolved.roles, id.from_string(raw)),
     dict.has_key(resolved.users, id.from_string(raw))
     || dict.has_key(resolved.members, id.from_string(raw))
   {
-    True, _ -> MentionedRole(id.from_string(raw))
-    False, True -> MentionedUser(id.from_string(raw))
-    False, False -> UnknownMentionable(raw)
+    True, _ -> Some(MentionedRole(id.from_string(raw)))
+    False, True -> Some(MentionedUser(id.from_string(raw)))
+    False, False -> None
   }
 }
 
@@ -690,18 +716,18 @@ pub fn decoder() -> Decoder(Interaction) {
   use message <- wire.opt_field("message", message.decoder())
   use app_permissions <- wire.opt_field(
     "app_permissions",
-    permissions.decoder(),
+    permissions.effective_decoder(),
   )
   use locale <- wire.opt_field("locale", decode.string)
   use guild_locale <- wire.opt_field("guild_locale", decode.string)
   use owners <- wire.dict_field(
     "authorizing_integration_owners",
-    application_command.integration_type_key_decoder(),
+    integration_owner_key_decoder(),
     authorizing_owner_decoder(),
   )
-  use context <- wire.opt_field(
+  use context <- wire.known_field(
     "context",
-    application_command.context_type_decoder(),
+    application_command.context_type_from_int,
   )
   use attachment_size_limit <- wire.opt_field(
     "attachment_size_limit",
@@ -835,7 +861,7 @@ fn id_option(
 ) -> Option(id.Id(k)) {
   case find_option(options, name) {
     Some(InteractionOption(type_:, value: StringValue(raw), ..)) ->
-      case type_ == accepting {
+      case type_ == Some(accepting) {
         True -> Some(id.from_string(raw))
         False -> None
       }
@@ -885,10 +911,10 @@ pub fn mentionable_option(
 ) -> Option(Mentionable) {
   case find_option(options, name) {
     Some(InteractionOption(
-      type_: application_command.MentionableOption,
+      type_: Some(application_command.MentionableOption),
       value: StringValue(raw),
       ..,
-    )) -> Some(mentionable(raw, resolved))
+    )) -> mentionable(raw, resolved)
     _ -> None
   }
 }
@@ -925,7 +951,8 @@ pub fn subcommand_path(
 
 fn is_subcommand_like(option: InteractionOption) -> Bool {
   case option.type_ {
-    application_command.SubCommand | application_command.SubCommandGroup -> True
+    Some(application_command.SubCommand)
+    | Some(application_command.SubCommandGroup) -> True
     _ -> False
   }
 }
@@ -976,13 +1003,18 @@ pub type InteractionResponse {
 
   /// Components only. Edit semantics: `Present([])` takes the components off
   /// the message. Field for field and key for key this is a message edit, so
-  /// it carries the same type, built with `draft.edit`.
+  /// it carries the same type, built with `update_data`.
   UpdateMessage(message.Edit)
 
   /// Autocomplete only. An empty list is legal and means no suggestions.
-  /// Max 25.
+  /// Max 25. `ChoiceValue` because the option being typed is only known at
+  /// runtime, so this response cannot be tied to one value type.
   AutocompleteResult(
-    choices: List(application_command.ApplicationCommandOptionChoice),
+    choices: List(
+      application_command.ApplicationCommandOptionChoice(
+        application_command.ChoiceValue,
+      ),
+    ),
   )
 }
 
@@ -1029,17 +1061,18 @@ pub fn ephemeral(data: MessageCallbackData) -> MessageCallbackData {
   )
 }
 
-/// The only constructor: the mention policy is not optional.
+/// Same as `message.new_edit`: the mention policy is not optional.
 pub fn update_data(mentions: AllowedMentions) -> message.Edit {
   message.new_edit(mentions)
 }
 
-pub fn to_json(response: InteractionResponse) -> Json {
+pub fn response_to_json(response: InteractionResponse) -> Json {
   json.object(response_fields(response))
 }
 
 /// A ready-to-send body for the callback route, files already paired to their
-/// `attachments` entries.
+/// `attachments` entries. `callback` calls this for you; an HTTP-interactions
+/// bot writing straight to its own HTTP response uses it directly.
 ///
 /// The callback nests its `attachments` array under `data`, so the document is
 /// finished here rather than left open: a top-level array as well would name
@@ -1048,7 +1081,10 @@ pub fn response_body(response: InteractionResponse) -> Body {
   case response_files(response) {
     [] -> body.json(response_fields(response))
     files ->
-      body.Finished(payload: to_json(response), files: attachment.parts(files))
+      body.Finished(
+        payload: response_to_json(response),
+        files: attachment.parts(files),
+      )
   }
 }
 
@@ -1059,8 +1095,8 @@ fn response_fields(response: InteractionResponse) -> List(#(String, Json)) {
   ])
 }
 
-/// The callback type Discord reads off the envelope. The numbering lives in
-/// `glyde/interaction`, which decodes the same values coming back.
+/// The callback type Discord reads off the envelope. Shares its numbering
+/// with `callback_type_from_int`, so encode and decode use one table.
 pub fn callback_type(response: InteractionResponse) -> InteractionCallbackType {
   case response {
     Pong -> PongCallback
@@ -1117,7 +1153,13 @@ fn data(response: InteractionResponse) -> Field(Json) {
     AutocompleteResult(choices:) ->
       Present(
         json.object([
-          #("choices", json.array(choices, application_command.choice_to_json)),
+          #(
+            "choices",
+            json.array(choices, application_command.choice_to_json(
+              _,
+              application_command.choice_value_to_json,
+            )),
+          ),
         ]),
       )
   }
@@ -1178,24 +1220,29 @@ pub fn responder(
 
 /// `POST /interactions/{interaction.id}/{token}/callback`, the first answer.
 /// Answers 204: use `callback_with_response` if you need the message id.
-pub fn callback(responder: Responder, body: Body) -> Call(Nil) {
-  rest.post(callback_at(responder), body, rest.NoContent(Nil))
-  |> rest.path_authenticated
+pub fn callback(
+  responder: Responder,
+  response: InteractionResponse,
+) -> Call(Nil) {
+  rest.post(
+    callback_at(responder),
+    response_body(response),
+    rest.NoContent(Nil),
+  )
 }
 
 /// `POST /interactions/{interaction.id}/{token}/callback?with_response=true`,
 /// answering 200 with the callback resource instead of 204.
 pub fn callback_with_response(
   responder: Responder,
-  body: Body,
+  response: InteractionResponse,
 ) -> Call(InteractionCallbackResponse) {
   rest.post(
     callback_at(responder),
-    body,
+    response_body(response),
     rest.Decoded(callback_response_decoder()),
   )
-  |> rest.path_authenticated
-  |> rest.query(query.one("with_response", query.flag(True)))
+  |> rest.query(query.one("with_response", True, query.flag))
 }
 
 /// `GET /webhooks/{application.id}/{token}/messages/@original`.
@@ -1254,13 +1301,13 @@ pub fn delete_followup(
 }
 
 /// This route is `route.Unbound`: it sits in no bucket, so the token cannot
-/// reach a key however the path is written. `opaque_text` keeps it out of the
-/// template as well, which is what a log of the route would show.
+/// reach a key however the path is written. `credential` keeps it out of the
+/// template and drops the `Authorization` header.
 fn callback_at(responder: Responder) -> List(seg.Seg) {
   [
     seg.lit("interactions"),
     seg.id(responder.interaction),
-    seg.opaque_text(reveal_token(responder.token)),
+    seg.credential(reveal_token(responder.token)),
     seg.lit("callback"),
   ]
 }

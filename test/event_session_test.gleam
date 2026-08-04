@@ -128,28 +128,26 @@ pub fn rate_limited_reads_the_member_request_meta_test() {
 
   assert limited.opcode == 8
   assert limited.meta
-    == session.MemberRequestMeta(
+    == Some(session.MemberRequestMeta(
       guild_id: id.from_string("10"),
       nonce: Some("abc"),
-    )
+    ))
 }
 
-/// An unreadable meta keeps the raw object rather than being guessed at.
-pub fn rate_limited_keeps_an_unreadable_meta_raw_test() {
+/// A meta shape this build has no name for decodes as `None` rather than
+/// failing the event.
+pub fn rate_limited_tolerates_an_unmodelled_meta_test() {
   let other =
     "{\"opcode\":31,\"retry_after\":1,\"meta\":{\"guild_ids\":[\"10\"]}}"
   let assert event.RateLimitedEvent(limited) = decoded("RATE_LIMITED", other)
-  let assert session.UnknownMeta(opcode, raw) = limited.meta
-
-  assert opcode == 31
-  assert decode.run(raw, decode.at(["guild_ids"], decode.list(decode.string)))
-    == Ok(["10"])
+  assert limited.opcode == 31
+  assert limited.meta == None
 
   // Opcode 8 with no guild_id is not a member request meta either.
   let assert event.RateLimitedEvent(headless) =
     decoded("RATE_LIMITED", "{\"opcode\":8,\"retry_after\":1}")
-  let assert session.UnknownMeta(eight, _) = headless.meta
-  assert eight == 8
+  assert headless.opcode == 8
+  assert headless.meta == None
 }
 
 /// A host arms a timer with this, so it never comes back negative.
@@ -167,11 +165,7 @@ pub fn retry_after_ms_never_goes_below_zero_test() {
   list.each(rows, fn(row) {
     let #(seconds, expected) = row
     let limited =
-      session.RateLimited(
-        opcode: 8,
-        retry_after: seconds,
-        meta: session.UnknownMeta(opcode: 8, raw: dynamic.nil()),
-      )
+      session.RateLimited(opcode: 8, retry_after: seconds, meta: None)
     assert session.retry_after_ms(limited) == expected
   })
 }
@@ -182,11 +176,7 @@ pub fn retry_after_ms_clamps_an_absurd_delay_test() {
   list.each(rows, fn(row) {
     let #(seconds, expected) = row
     let limited =
-      session.RateLimited(
-        opcode: 8,
-        retry_after: seconds,
-        meta: session.UnknownMeta(opcode: 8, raw: dynamic.nil()),
-      )
+      session.RateLimited(opcode: 8, retry_after: seconds, meta: None)
     assert session.retry_after_ms(limited) == expected
   })
 }

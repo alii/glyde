@@ -58,8 +58,9 @@ fn messages(bytes: BitArray) -> List(frame.Message) {
 // The easy cases
 
 pub fn new_starts_from_the_handshake_leftovers_test() {
-  assert stream.new(<<1, 2, 3>>, room)
-    == stream.Stream(buffer: <<1, 2, 3>>, assembly: frame.Idle, max_bytes: room)
+  let held = stream.new(<<1, 2, 3>>, room)
+  assert stream.buffered(held) == 3
+  assert stream.next(held) == stream.Waiting(held)
 }
 
 pub fn one_frame_is_one_message_test() {
@@ -94,12 +95,7 @@ pub fn leftover_bytes_stay_in_the_buffer_test() {
   let assert stream.Ready(message:, stream:) =
     stream.next(stream.new(bytes, room))
   assert message == frame.TextMessage("hi")
-  assert stream
-    == stream.Stream(
-      buffer: <<0x81, 0x05>>,
-      assembly: frame.Idle,
-      max_bytes: room,
-    )
+  assert stream == stream.new(<<0x81, 0x05>>, room)
 }
 
 // Bytes arriving in pieces
@@ -139,12 +135,7 @@ pub fn feed_appends_to_what_is_already_held_test() {
   let stream =
     stream.new(<<1>>, room) |> stream.feed(<<2>>) |> stream.feed(<<3, 4>>)
 
-  assert stream
-    == stream.Stream(
-      buffer: <<1, 2, 3, 4>>,
-      assembly: frame.Idle,
-      max_bytes: room,
-    )
+  assert stream == stream.new(<<1, 2, 3, 4>>, room)
 }
 
 // Fragmented messages
@@ -175,15 +166,15 @@ pub fn a_control_frame_between_fragments_does_not_disturb_it_test() {
 
 /// A caller that drops the returned stream loses the held fragment.
 pub fn a_held_fragment_leaves_the_buffer_test() {
-  let assert stream.Waiting(stream) =
+  let assert stream.Waiting(held) =
     stream.next(stream.new(text_frame(False, "held"), room))
 
-  assert stream
-    == stream.Stream(
-      buffer: <<>>,
-      assembly: frame.Fragmented(text: True, payload: <<"held":utf8>>),
-      max_bytes: room,
-    )
+  // The frame header is gone; only the payload stays, in the assembly.
+  assert stream.buffered(held) == 4
+
+  let assert stream.Ready(message:, ..) =
+    stream.next(stream.feed(held, continuation(True, " on")))
+  assert message == frame.TextMessage("held on")
 }
 
 /// A per-fragment UTF-8 check would reject a codepoint split across frames.
@@ -459,7 +450,7 @@ pub fn buffered_grows_with_a_fragment_chain_test() {
     stream.next(stream.feed(held, last))
   assert message == frame.BinaryMessage(payload)
   assert stream.buffered(done) == 0
-  assert done.assembly == frame.Idle
+  assert done == stream.new(<<>>, room)
 }
 
 // The cap

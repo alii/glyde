@@ -32,6 +32,14 @@ pub fn from_option(option: Option(a)) -> Field(a) {
   }
 }
 
+/// `None` becomes `Null`, for a PATCH that clears the field.
+pub fn or_null(option: Option(a)) -> Field(a) {
+  case option {
+    Some(value) -> Present(value)
+    None -> Null
+  }
+}
+
 pub fn is_absent(field: Field(a)) -> Bool {
   case field {
     Absent -> True
