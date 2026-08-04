@@ -41,5 +41,5 @@ the bot's identify budget retrying.
 out and the core's diagnostics:
 
 ```gleam
-|> glyde.on_status(fn(status) { io.println(glyde.describe(status)) })
+|> glyde.on_status(fn(seen) { io.println(status.describe(seen)) })
 ```

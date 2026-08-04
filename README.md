@@ -16,6 +16,7 @@ import gleam/bool
 import gleam/int
 import gleam/io
 import glyde
+import glyde/draft
 import glyde/intents
 
 pub fn main() -> Nil {
@@ -30,15 +31,15 @@ pub fn main() -> Nil {
       intents.MessageContent,
     ]),
   )
-  |> glyde.on_ready(fn(_bot, pongs, ready) {
+  |> glyde.on_ready(fn(pongs, ready) {
     io.println("logged in as " <> ready.me.user.username)
-    pongs
+    glyde.continue(pongs)
   })
-  |> glyde.on_message(fn(bot, pongs, message) {
-    use <- bool.guard(message.content != "!ping", pongs)
-    let pongs = pongs + 1
-    glyde.reply(bot, message, "pong! #" <> int.to_string(pongs))
-    pongs
+  |> glyde.on_message(fn(pongs, message) {
+    use <- bool.guard(message.content != "!ping", glyde.continue(pongs))
+    let pong = draft.text("pong! #" <> int.to_string(pongs + 1))
+    use _ <- glyde.reply(message, pong)
+    glyde.continue(pongs + 1)
   })
   |> glyde.run
 }
@@ -101,10 +102,9 @@ from, which carries the decoder for that endpoint.
 let call =
   channel.create_message(
     channel_id,
-    message.create()
-      |> message.content("shipped")
-      |> message.embed(embed.new() |> embed.title("v0.1.0"))
-      |> message.create_body,
+    draft.text("shipped")
+      |> draft.embed(embed.new() |> embed.title("v0.1.0"))
+      |> draft.to_body,
   )
 
 let request = rest.request(rest.config(rest.bot(token)), call)
@@ -118,11 +118,12 @@ a state machine too: it says when to send and what a 429 means, it does not
 sleep and it does not retry behind your back.
 
 84 endpoints, covering channels and messages, guilds, members, roles, threads,
-application commands, interactions, webhooks and users. Bodies come from the
-builders in `glyde/payload`, and `message.create_body` writes the `attachments`
-cross-reference for any file on the payload, which a hand-written JSON object
-silently does not. Ids are tagged by what they identify, so the two snowflakes
-in `/channels/{channel_id}/messages/{message_id}` cannot be swapped.
+application commands, interactions, webhooks and users. A message body comes
+from `glyde/draft`, the rest from `glyde/payload`, and `draft.to_body` writes
+the `attachments` cross-reference for any file on the draft, which a
+hand-written JSON object silently does not. Ids are tagged by what they
+identify, so the two snowflakes in `/channels/{channel_id}/messages/{message_id}`
+cannot be swapped.
 
 ## What is not in it
 

@@ -9,6 +9,7 @@
 
 import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
+import glyde/draft
 import glyde/field.{type Field, Absent, Present}
 import glyde/flags
 import glyde/model/application_command.{type ApplicationCommandOptionChoice}
@@ -20,7 +21,6 @@ import glyde/model/message.{
 import glyde/payload/allowed_mentions.{type AllowedMentions}
 import glyde/payload/embed.{type Embed}
 import glyde/payload/file.{type File}
-import glyde/payload/message as outgoing
 import glyde/rest/body.{type Body}
 import glyde/wire
 
@@ -43,8 +43,8 @@ pub type InteractionResponse {
 
   /// Components only. Edit semantics: `Present([])` takes the components off
   /// the message. Field for field and key for key this is a message edit, so
-  /// it carries the same type, built with `payload/message.edit`.
-  UpdateMessage(outgoing.EditMessage)
+  /// it carries the same type, built with `draft.edit`.
+  UpdateMessage(draft.Edit)
 
   /// Autocomplete only. An empty list is legal and means no suggestions.
   /// Max 25.
@@ -52,7 +52,7 @@ pub type InteractionResponse {
 }
 
 /// Callback data for `ChannelMessageWithSource`. Same shape and rules as
-/// `CreateMessage`.
+/// `Draft`.
 pub type MessageCallbackData {
   MessageCallbackData(
     content: Option(String),
@@ -92,8 +92,8 @@ pub fn ephemeral(data: MessageCallbackData) -> MessageCallbackData {
 }
 
 /// The only constructor: the mention policy is not optional.
-pub fn update_data(mentions: AllowedMentions) -> outgoing.EditMessage {
-  outgoing.edit(mentions)
+pub fn update_data(mentions: AllowedMentions) -> draft.Edit {
+  draft.edit(mentions)
 }
 
 pub fn to_json(response: InteractionResponse) -> Json {
@@ -143,7 +143,7 @@ pub fn callback_type(
 pub fn response_files(response: InteractionResponse) -> List(File) {
   case response {
     ChannelMessageWithSource(data) -> data.files
-    UpdateMessage(data) -> outgoing.edit_files(data)
+    UpdateMessage(data) -> draft.edit_files(data)
     Pong
     | DeferredChannelMessageWithSource(_)
     | DeferredUpdateMessage
@@ -155,8 +155,8 @@ pub fn message_data_to_json(data: MessageCallbackData) -> Json {
   wire.object(message_data_entries(data))
 }
 
-pub fn update_data_to_json(data: outgoing.EditMessage) -> Json {
-  wire.object(outgoing.edit_entries(data))
+pub fn update_data_to_json(data: draft.Edit) -> Json {
+  wire.object(draft.edit_entries(data))
 }
 
 fn data(response: InteractionResponse) -> Field(Json) {
@@ -197,7 +197,7 @@ fn message_data_entries(
       "allowed_mentions",
       wire.put(wire.opt(data.allowed_mentions), allowed_mentions.to_json),
     ),
-    #("flags", outgoing.flags_field(data.flags)),
+    #("flags", draft.flags_field(data.flags)),
     #(
       "components",
       wire.put_list(wire.opt_list(data.components), component.to_json),

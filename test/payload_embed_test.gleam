@@ -4,9 +4,9 @@ import gleam/json
 import gleam/option.{None, Some}
 import gleam/string
 import glyde/api/channel
+import glyde/draft
 import glyde/id
 import glyde/payload/embed
-import glyde/payload/message
 import glyde/rest
 import glyde/rest/body
 
@@ -85,11 +85,7 @@ pub fn an_embed_becomes_a_request_test() {
   let call =
     channel.create_message(
       id.from_string("41771983423143937"),
-      message.create_body(
-        message.create()
-        |> message.content("release")
-        |> message.embed(card),
-      ),
+      draft.to_body(draft.text("release") |> draft.embed(card)),
     )
 
   let req = rest.request(rest.config(rest.bot("token")), call)

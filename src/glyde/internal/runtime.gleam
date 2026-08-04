@@ -1,7 +1,9 @@
 //// The loop under `glyde.run`. Nothing in here is API: `glyde` names what a
 //// user sees, this module does it.
 
-import gleam/dynamic/decode
+import gleam/bit_array
+import gleam/http/request.{type Request}
+import gleam/http/response.{type Response}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -9,17 +11,41 @@ import glyde/client
 import glyde/event.{type Event}
 import glyde/gateway
 import glyde/gateway/frame
+import glyde/rest/headers
+import glyde/rest/limiter.{type Limiter, type Ticket}
+import glyde/rest/route.{type Route}
+import glyde/status.{
+  type CallFailure, type Status, Connecting, Halted, Note, Paced, Reconnecting,
+  Sent, Undecodable, Unreachable, Withheld, WouldBlock,
+}
 import glyde/transport.{type Transport}
 
-/// What the loop saw that is not a Discord event. `glyde` turns each into its
-/// own `Status`, which is where the words live.
-pub type Report {
-  Connecting(host: String)
-  Reconnecting(in_ms: Int, resuming: Bool, why: gateway.Why)
-  Halted(reason: gateway.Halt)
-  Sent(op: frame.Opcode)
-  Undecodable(name: String, errors: List(decode.DecodeError))
-  Noted(gateway.Notice)
+/// What a handler hands back: its new state, or a request it wants answered
+/// first and what to do with the answer. The loop performs it, nobody else.
+pub type Step(state) {
+  Done(state)
+  Perform(
+    request: Request(BitArray),
+    route: Route,
+    resume: fn(Answer) -> Step(state),
+  )
+}
+
+/// Never `Refused`: reading the body is the continuation's job, because only
+/// it holds the decoder.
+pub type Answer =
+  Result(Response(BitArray), CallFailure)
+
+/// Run `step` to its state, then start `next` from there. How two listeners on
+/// one event are chained without the second seeing a stale state.
+pub fn after(step: Step(state), next: fn(state) -> Step(state)) -> Step(state) {
+  case step {
+    Done(state) -> next(state)
+    Perform(request:, route:, resume:) ->
+      Perform(request:, route:, resume: fn(answer) {
+        after(resume(answer), next)
+      })
+  }
 }
 
 /// Connect and loop until the shard halts. `deliver` is every listener folded
@@ -28,8 +54,8 @@ pub fn run(
   config config: gateway.Config,
   transport transport: Transport,
   state state: state,
-  deliver deliver: fn(state, Event) -> state,
-  report report: fn(Report) -> Nil,
+  deliver deliver: fn(state, Event) -> Step(state),
+  report report: fn(Status) -> Nil,
 ) -> Nil {
   // The core has no randomness, so the jitter seed comes from out here. A
   // fleet gives each shard a different one with `client.with_seed`.
@@ -42,6 +68,9 @@ pub fn run(
       deliver:,
       report:,
       user: state,
+      inbox: [],
+      limiter: limiter.new(limiter.defaults()),
+      tickets: 0,
       dial: None,
       deadlines: [],
     ),
@@ -49,7 +78,7 @@ pub fn run(
   )
   |> client.on_event(dispatch)
   |> client.on_notice(fn(runtime: Runtime(state), notice) {
-    runtime.report(Noted(notice))
+    runtime.report(Note(notice))
     runtime
   })
   |> client.start
@@ -61,10 +90,19 @@ pub fn run(
 type Runtime(state) {
   Runtime(
     transport: Transport,
-    deliver: fn(state, Event) -> state,
-    report: fn(Report) -> Nil,
+    deliver: fn(state, Event) -> Step(state),
+    report: fn(Status) -> Nil,
     /// Your value, as the last listener left it.
     user: state,
+    /// Dispatches decoded but not yet handled, oldest first. A handler waiting
+    /// on the limiter must not have the next one run against its old state.
+    inbox: List(Event),
+    /// Around `transport.request`, not inside it, so a transport of your own
+    /// is paced without knowing this exists.
+    limiter: Limiter,
+    /// The next ticket to mint. One call is out at a time, so this only has to
+    /// be different from the last.
+    tickets: Int,
     /// `None` between a close and the next dial. Everything about a socket
     /// lives in here, so none of it can be read when there is no socket.
     dial: Option(Dial),
@@ -114,29 +152,40 @@ fn on_socket(
 /// asking for one, so it is a floor and not a schedule. Our number.
 const nothing_due: Int = 60_000
 
-/// One turn of the runtime. Every branch ends in a tail call, so this runs for
-/// the life of the bot in constant space.
+/// Handle what is waiting, then take one turn of the socket. Every branch ends
+/// in a tail call, so this runs for the life of the bot in constant space.
 fn spin(bot: client.Bot(Runtime(state))) -> Nil {
+  // Before the terminal check: a dispatch that arrived in the same read as a
+  // fatal close is still owed its handlers.
+  let bot = settle(bot)
   case client.is_terminal(bot) {
     True -> Nil
-    False -> {
-      let runtime = client.state(bot)
+    False -> spin(once(bot, nothing_due))
+  }
+}
 
-      case runtime.dial {
-        // A write already said the socket is gone, so there is nothing to read.
-        Some(Dial(dead: True, ..)) -> spin(gave_up(bot))
+/// One turn of IO: read the socket or sit out the gap, then service the clock.
+/// `within` caps the block for a caller with a deadline of its own.
+fn once(
+  bot: client.Bot(Runtime(state)),
+  within: Int,
+) -> client.Bot(Runtime(state)) {
+  let runtime = client.state(bot)
+  let timeout = int.min(within, waiting(runtime))
 
-        // The read timeout is the timer: whichever comes first wakes us.
-        Some(dial) -> {
-          let #(next, events) = dial.socket.turn(waiting(runtime))
-          spin(woke(bot, next, events))
-        }
+  case runtime.dial {
+    // A write already said the socket is gone, so there is nothing to read.
+    Some(Dial(dead: True, ..)) -> gave_up(bot)
 
-        None -> {
-          runtime.transport.idle(waiting(runtime))
-          spin(fire_due(bot))
-        }
-      }
+    // The read timeout is the timer: whichever comes first wakes us.
+    Some(dial) -> {
+      let #(next, events) = dial.socket.turn(timeout)
+      woke(bot, next, events)
+    }
+
+    None -> {
+      runtime.transport.idle(timeout)
+      fire_due(bot)
     }
   }
 }
@@ -148,6 +197,184 @@ fn waiting(runtime: Runtime(state)) -> Int {
     None -> nothing_due
   }
 }
+
+// -- Handlers ----------------------------------------------------------------
+
+/// Run every buffered dispatch through the handlers, one at a time and each to
+/// its `Done` before the next starts. Two handlers in flight would both read
+/// one state and one of their updates would be lost.
+fn settle(bot: client.Bot(Runtime(state))) -> client.Bot(Runtime(state)) {
+  let runtime = client.state(bot)
+  case runtime.inbox {
+    [] -> bot
+    [event, ..inbox] ->
+      client.update(bot, fn(runtime) { Runtime(..runtime, inbox:) })
+      |> resume(runtime.deliver(runtime.user, event))
+      |> settle
+  }
+}
+
+/// Interpret one handler's step until it yields a state.
+fn resume(
+  bot: client.Bot(Runtime(state)),
+  step: Step(state),
+) -> client.Bot(Runtime(state)) {
+  case step {
+    Done(user) -> client.update(bot, fn(runtime) { Runtime(..runtime, user:) })
+    Perform(request:, route:, resume: then) -> {
+      let #(bot, answer) = perform(bot, request, route, 1)
+      resume(bot, then(answer))
+    }
+  }
+}
+
+/// Sends per `Perform`, our number. The first 429 teaches the limiter the
+/// bucket so the second try is timed right; a third covers a global and a
+/// route limit landing back to back. Past that, retrying only spends the
+/// invalid-request budget.
+const max_attempts: Int = 3
+
+/// How long a handler may wait on the limiter before the call is failed, in
+/// ms. Our number. The heart beats through the wait, so this bounds how stale
+/// the events queued behind get, not the connection: 10s rides out any
+/// ordinary bucket reset and fails fast on the limits Discord counts in minutes.
+const longest_wait: Int = 10_000
+
+/// One request through the limiter and the transport, retried on 429.
+fn perform(
+  bot: client.Bot(Runtime(state)),
+  request: Request(BitArray),
+  route: Route,
+  attempt: Int,
+) -> #(client.Bot(Runtime(state)), Answer) {
+  let #(bot, ticket) = mint(bot)
+  let input = case attempt {
+    1 -> limiter.Submit(ticket:, route:)
+    // The front of the queue, so a retry is not reordered behind newer work.
+    _ -> limiter.Retry(ticket:, route:)
+  }
+  let give_up_at = client.state(bot).transport.now() + longest_wait
+  let #(bot, verdict) = limit(bot, input, ticket)
+
+  case admit(bot, ticket, verdict, give_up_at) {
+    #(bot, Error(why)) -> #(bot, Error(why))
+    #(bot, Ok(Nil)) ->
+      case client.state(bot).transport.request(request) {
+        // Went out or not, the slot has to come back or the route is stuck
+        // behind a probe that never lands.
+        Error(reason) -> {
+          let #(bot, _) =
+            limit(bot, limiter.Settled(ticket, limiter.Opaque), ticket)
+          #(bot, Error(Unreachable(reason)))
+        }
+        Ok(got) -> {
+          let outcome =
+            headers.outcome(
+              status: got.status,
+              headers: got.headers,
+              body: throttle_body(got),
+            )
+          let settled =
+            limiter.Settled(ticket, headers.to_limiter_outcome(outcome))
+          let #(bot, _) = limit(bot, settled, ticket)
+          case got.status == 429 && attempt < max_attempts {
+            True -> perform(bot, request, route, attempt + 1)
+            False -> #(bot, Ok(got))
+          }
+        }
+      }
+  }
+}
+
+/// `headers.outcome` reads the body on a 429 only, so nothing else is decoded.
+fn throttle_body(got: Response(BitArray)) -> String {
+  case got.status {
+    429 ->
+      case bit_array.to_string(got.body) {
+        Ok(text) -> text
+        Error(_) -> ""
+      }
+    _ -> ""
+  }
+}
+
+fn mint(
+  bot: client.Bot(Runtime(state)),
+) -> #(client.Bot(Runtime(state)), Ticket) {
+  let number = client.state(bot).tickets
+  let bot =
+    client.update(bot, fn(runtime) { Runtime(..runtime, tickets: number + 1) })
+  #(bot, limiter.Ticket(number))
+}
+
+/// What the limiter said about the one ticket we asked after.
+type Verdict {
+  Go
+  Wait
+  No(limiter.Refusal)
+}
+
+/// Feed the limiter one input and read its outputs. `Wake` is dropped: the wait
+/// reads `wake_after` itself, so there is no timer to arm.
+fn limit(
+  bot: client.Bot(Runtime(state)),
+  input: limiter.Input,
+  ticket: Ticket,
+) -> #(client.Bot(Runtime(state)), Verdict) {
+  let runtime = client.state(bot)
+  let #(next, outputs) =
+    limiter.step(runtime.limiter, now_ms: runtime.transport.now(), input:)
+  let bot =
+    client.update(bot, fn(runtime) { Runtime(..runtime, limiter: next) })
+
+  let verdict =
+    list.fold(outputs, Wait, fn(verdict, output) {
+      case output {
+        limiter.Send(sent) if sent == ticket -> Go
+        limiter.Refuse(refused, why) if refused == ticket -> No(why)
+        limiter.Note(notice) -> {
+          runtime.report(Paced(notice))
+          verdict
+        }
+        _ -> verdict
+      }
+    })
+  #(bot, verdict)
+}
+
+/// Wait for a permit by turning the socket, so heartbeats and gateway traffic
+/// are serviced and dispatches pile up in the inbox rather than being lost.
+/// Gives up once the limiter's deadline passes `give_up_at`.
+fn admit(
+  bot: client.Bot(Runtime(state)),
+  ticket: Ticket,
+  verdict: Verdict,
+  give_up_at: Int,
+) -> #(client.Bot(Runtime(state)), Result(Nil, CallFailure)) {
+  case verdict {
+    Go -> #(bot, Ok(Nil))
+    No(why) -> #(bot, Error(Withheld(why)))
+    Wait -> {
+      let runtime = client.state(bot)
+      let now = runtime.transport.now()
+      case limiter.wake_after(runtime.limiter, now_ms: now) {
+        Some(in_ms) if now + in_ms <= give_up_at -> {
+          let bot = once(bot, in_ms)
+          let #(bot, verdict) = limit(bot, limiter.Tick, ticket)
+          admit(bot, ticket, verdict, give_up_at)
+        }
+        // Too long, or blocked on something no clock brings closer. Take the
+        // ticket back so the next call is not queued behind a ghost.
+        other -> {
+          let #(bot, _) = limit(bot, limiter.Abandoned(ticket), ticket)
+          #(bot, Error(WouldBlock(option.unwrap(other, longest_wait))))
+        }
+      }
+    }
+  }
+}
+
+// -- Socket ------------------------------------------------------------------
 
 /// A write came back `False`. `glyde/client` says that comes back as a close,
 /// and the `Drop` the shard answers with is what abandons the socket.
@@ -291,7 +518,7 @@ fn wiring() -> client.Transport(Runtime(state)) {
         None -> runtime
         Some(dial) ->
           case dial.socket.send(payload.text) {
-            // Reported after the write, not before: `glyde/client` promises a
+            // Told after the write, not before: `glyde/client` promises a
             // failed write comes back as a close, never as a frame that went.
             True -> {
               runtime.report(Sent(payload.op))
@@ -324,6 +551,9 @@ fn wiring() -> client.Transport(Runtime(state)) {
   )
 }
 
+/// Decode and queue. The handlers run from `settle`, never from in here: this
+/// is mid-batch inside `glyde/client`, and a handler that waits on the limiter
+/// would be turning the socket with the shard's outputs half performed.
 fn dispatch(
   runtime: Runtime(state),
   emitted: gateway.Event,
@@ -341,7 +571,7 @@ fn dispatch(
         }
       }
       client.keep(
-        Runtime(..runtime, user: runtime.deliver(runtime.user, decoded)),
+        Runtime(..runtime, inbox: list.append(runtime.inbox, [decoded])),
       )
     }
 

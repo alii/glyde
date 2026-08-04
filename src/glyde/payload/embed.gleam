@@ -19,6 +19,7 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import glyde/internal/utf16
+import glyde/model/embed as received
 import glyde/wire
 
 /// Transparent, so a record update works as well as the pipeline.
@@ -66,6 +67,29 @@ pub fn new() -> Embed {
     thumbnail: None,
     author: None,
     fields: [],
+  )
+}
+
+/// The send shape of a received embed. Type, provider, video, proxy urls and
+/// media sizes do not carry: Discord ignores them on a create anyway.
+pub fn from(embed: received.Embed) -> Embed {
+  Embed(
+    title: embed.title,
+    description: embed.description,
+    url: embed.url,
+    timestamp: embed.timestamp,
+    color: embed.color,
+    footer: option.map(embed.footer, fn(footer) {
+      EmbedFooter(text: footer.text, icon_url: footer.icon_url)
+    }),
+    image: option.then(embed.image, fn(media) { media.url }),
+    thumbnail: option.then(embed.thumbnail, fn(media) { media.url }),
+    author: option.map(embed.author, fn(author) {
+      EmbedAuthor(name: author.name, url: author.url, icon_url: author.icon_url)
+    }),
+    fields: list.map(embed.fields, fn(field) {
+      EmbedField(name: field.name, value: field.value, inline: field.inline)
+    }),
   )
 }
 

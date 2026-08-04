@@ -1,9 +1,13 @@
-//// Bodies for creating and editing a message.
+//// A message on its way out: the create body every bot builds, plus the edit
+//// and bulk-delete bodies that sit beside it.
 ////
 //// Create and edit are separate types: an empty array is an absence on POST
 //// and an instruction on PATCH. `allowed_mentions` is required on `edit`
 //// because an edit without it re-parses the content with Discord's defaults,
 //// whatever the message was sent with.
+////
+//// A draft is built by piping from `new()` or `text`. Setters for the list
+//// fields (`embed`, `attach`, `component`, `sticker`) append; the rest replace.
 
 import gleam/json.{type Json}
 import gleam/list
@@ -72,8 +76,8 @@ fn reference_type(value: Reference) -> Json {
 /// `POST /channels/{c}/messages`. Discord needs at least one of `content`,
 /// `embeds`, `sticker_ids`, `components`, a file or a poll, unless it is a
 /// forward. Not checked here: Discord's 400 names the bad fields.
-pub type CreateMessage {
-  CreateMessage(
+pub type Draft {
+  Draft(
     /// Max 2000 characters.
     content: Option(String),
     /// Max 10, and 6000 characters across all of them.
@@ -107,50 +111,93 @@ pub type NoncePolicy {
   UseNonce(value: message.Nonce, enforce: Bool)
 }
 
-/// A nonce Discord echoes back on MESSAGE_CREATE, enforced, so a retried POST
-/// returns the first message rather than posting twice. The safe one is the
-/// short name on purpose: a retry is the reason to reach for a nonce at all.
-pub fn with_nonce(
-  payload: CreateMessage,
-  value: message.Nonce,
-) -> CreateMessage {
-  CreateMessage(..payload, nonce: UseNonce(value:, enforce: True))
+const empty = Draft(
+  content: None,
+  embeds: [],
+  components: [],
+  sticker_ids: [],
+  files: [],
+  allowed_mentions: None,
+  reference: None,
+  tts: False,
+  nonce: NoNonce,
+  flags: message.no_flags,
+)
+
+/// An empty draft, to pipe setters onto.
+pub fn new() -> Draft {
+  empty
 }
 
-/// A nonce only for correlating MESSAGE_CREATE back to the create. Discord
-/// does not dedupe on it, so a retried POST posts a second message.
-pub fn with_correlation_nonce(
-  payload: CreateMessage,
-  value: message.Nonce,
-) -> CreateMessage {
-  CreateMessage(..payload, nonce: UseNonce(value:, enforce: False))
+/// `new() |> content(content)`, since most messages start with words.
+pub fn text(content: String) -> Draft {
+  Draft(..new(), content: Some(content))
 }
 
-/// An empty message. Build on it with a record update.
-pub fn create() -> CreateMessage {
-  CreateMessage(
-    content: None,
-    embeds: [],
-    components: [],
-    sticker_ids: [],
-    files: [],
-    allowed_mentions: None,
-    reference: None,
-    tts: False,
-    nonce: NoNonce,
-    flags: message.no_flags,
+/// A draft with this message's content, embeds, components, stickers and
+/// the flags a create may set. Attachments do not carry: a received one is a
+/// URL, a draft's is bytes. Nor do the receive-only parts of an embed (type,
+/// provider, video, proxy urls, media sizes), which Discord drops on send.
+pub fn from(message: message.Message) -> Draft {
+  Draft(
+    ..new(),
+    content: case message.content {
+      "" -> None
+      content -> Some(content)
+    },
+    embeds: list.map(message.embeds, embed.from),
+    components: message.components,
+    sticker_ids: list.map(message.sticker_items, fn(item) { item.id }),
+    flags: settable_on_create(message.flags),
   )
 }
 
-pub fn text(content: String) -> CreateMessage {
-  CreateMessage(..create(), content: Some(content))
+// IS_VOICE_MESSAGE is settable too, but only with the audio file beside it,
+// and files do not carry.
+fn settable_on_create(received: message.MessageFlags) -> message.MessageFlags {
+  [
+    message.SuppressEmbeds,
+    message.SuppressNotifications,
+    message.IsComponentsV2,
+  ]
+  |> list.filter(fn(flag) { message.has_flag(received, flag) })
+  |> message.message_flags
 }
 
-/// A reply. `fail_if_not_exists` stays at Discord's default, so replying to a
-/// message that has since been deleted is a 400.
-pub fn reply_to(message_id: id.MessageId, content: String) -> CreateMessage {
-  CreateMessage(
-    ..text(content),
+pub fn content(draft: Draft, content: String) -> Draft {
+  Draft(..draft, content: Some(content))
+}
+
+pub fn embed(draft: Draft, embed: Embed) -> Draft {
+  Draft(..draft, embeds: list.append(draft.embeds, [embed]))
+}
+
+/// `to_body` writes the matching `attachments` entry, so an embed can point
+/// at it with `attachment://{filename}`.
+pub fn attach(draft: Draft, file: File) -> Draft {
+  Draft(..draft, files: list.append(draft.files, [file]))
+}
+
+/// One top-level component, so an action row at a time.
+pub fn component(draft: Draft, component: component.Component) -> Draft {
+  Draft(..draft, components: list.append(draft.components, [component]))
+}
+
+/// Discord takes at most 3.
+pub fn sticker(draft: Draft, sticker: id.StickerId) -> Draft {
+  Draft(..draft, sticker_ids: list.append(draft.sticker_ids, [sticker]))
+}
+
+/// Without this Discord pings every mention in the content.
+pub fn mentions(draft: Draft, policy: AllowedMentions) -> Draft {
+  Draft(..draft, allowed_mentions: Some(policy))
+}
+
+/// Make it a reply. `fail_if_not_exists` stays at Discord's default, so
+/// replying to a message that has since been deleted is a 400.
+pub fn reply_to(draft: Draft, message_id: id.MessageId) -> Draft {
+  Draft(
+    ..draft,
     reference: Some(Reply(
       message_id: message_id,
       channel_id: None,
@@ -160,13 +207,15 @@ pub fn reply_to(message_id: id.MessageId, content: String) -> CreateMessage {
   )
 }
 
-/// A forward, which carries no content of its own.
+/// Make it a forward. Discord accepts `new() |> forward_of(..)` on its own: a
+/// forward needs no content.
 pub fn forward_of(
+  draft: Draft,
   message_id: id.MessageId,
   from channel_id: id.ChannelId,
-) -> CreateMessage {
-  CreateMessage(
-    ..create(),
+) -> Draft {
+  Draft(
+    ..draft,
     reference: Some(Forward(
       message_id: message_id,
       channel_id: channel_id,
@@ -175,48 +224,80 @@ pub fn forward_of(
   )
 }
 
+/// Read aloud by the client to anyone with the channel open.
+pub fn tts(draft: Draft) -> Draft {
+  Draft(..draft, tts: True)
+}
+
+/// No link previews. The other create-time flags are IS_VOICE_MESSAGE and
+/// IS_COMPONENTS_V2; set those on `flags` directly.
+pub fn suppress_embeds(draft: Draft) -> Draft {
+  with(draft, message.SuppressEmbeds)
+}
+
+/// Delivered without a push or desktop notification, mentions included.
+pub fn silent(draft: Draft) -> Draft {
+  with(draft, message.SuppressNotifications)
+}
+
+fn with(draft: Draft, flag: message.MessageFlag) -> Draft {
+  Draft(..draft, flags: message.with_flag(draft.flags, flag))
+}
+
+/// A nonce Discord echoes back on MESSAGE_CREATE, enforced, so a retried POST
+/// returns the first message rather than posting twice. The safe one is the
+/// short name on purpose: a retry is the reason to reach for a nonce at all.
+pub fn with_nonce(draft: Draft, value: message.Nonce) -> Draft {
+  Draft(..draft, nonce: UseNonce(value:, enforce: True))
+}
+
+/// A nonce only for correlating MESSAGE_CREATE back to the create. Discord
+/// does not dedupe on it, so a retried POST posts a second message.
+pub fn with_correlation_nonce(draft: Draft, value: message.Nonce) -> Draft {
+  Draft(..draft, nonce: UseNonce(value:, enforce: False))
+}
+
 /// A ready-to-send body, files already paired to their `attachments` entries.
-pub fn create_body(payload: CreateMessage) -> Body {
-  case payload.files {
-    [] -> body.json(create_fields(payload))
-    files ->
-      body.Form(payload: create_fields(payload), files: file.parts(files))
+pub fn to_body(draft: Draft) -> Body {
+  case draft.files {
+    [] -> body.json(create_fields(draft))
+    files -> body.Form(payload: create_fields(draft), files: file.parts(files))
   }
 }
 
-fn create_fields(payload: CreateMessage) -> List(#(String, Json)) {
+fn create_fields(draft: Draft) -> List(#(String, Json)) {
   wire.entries([
-    #("content", wire.put(wire.opt(payload.content), json.string)),
-    #("nonce", nonce(payload.nonce)),
-    #("tts", wire.flag(payload.tts)),
-    #("embeds", wire.put_list(wire.opt_list(payload.embeds), embed.to_json)),
+    #("content", wire.put(wire.opt(draft.content), json.string)),
+    #("nonce", nonce(draft.nonce)),
+    #("tts", wire.flag(draft.tts)),
+    #("embeds", wire.put_list(wire.opt_list(draft.embeds), embed.to_json)),
     #(
       "allowed_mentions",
-      wire.put(wire.opt(payload.allowed_mentions), allowed_mentions.to_json),
+      wire.put(wire.opt(draft.allowed_mentions), allowed_mentions.to_json),
     ),
     #(
       "message_reference",
-      wire.put(wire.opt(payload.reference), reference_to_json),
+      wire.put(wire.opt(draft.reference), reference_to_json),
     ),
     #(
       "components",
-      wire.put_list(wire.opt_list(payload.components), component.to_json),
+      wire.put_list(wire.opt_list(draft.components), component.to_json),
     ),
     #(
       "sticker_ids",
-      wire.put_list(wire.opt_list(payload.sticker_ids), id.to_json),
+      wire.put_list(wire.opt_list(draft.sticker_ids), id.to_json),
     ),
-    #("attachments", file.new_attachments_field(payload.files)),
-    #("flags", flags_field(payload.flags)),
-    #("enforce_nonce", enforcement(payload.nonce)),
+    #("attachments", file.new_attachments_field(draft.files)),
+    #("flags", flags_field(draft.flags)),
+    #("enforce_nonce", enforcement(draft.nonce)),
   ])
 }
 
 /// `PATCH /channels/{c}/messages/{m}`. The `attachments` array has to name
 /// every attachment that survives the edit, so it and the uploads are one
 /// field.
-pub type EditMessage {
-  EditMessage(
+pub type Edit {
+  Edit(
     content: Field(String),
     /// `Null` sends `null`. `Present([])` empties the list, which is what
     /// IS_COMPONENTS_V2 requires: it wants `[]` specifically, not `null`.
@@ -233,8 +314,8 @@ pub type EditMessage {
 }
 
 /// The only constructor: the mention policy is not optional.
-pub fn edit(mentions: AllowedMentions) -> EditMessage {
-  EditMessage(
+pub fn edit(mentions: AllowedMentions) -> Edit {
+  Edit(
     content: Absent,
     embeds: Absent,
     components: Absent,
@@ -245,40 +326,40 @@ pub fn edit(mentions: AllowedMentions) -> EditMessage {
 }
 
 /// A ready-to-send body for a `PATCH`, files included.
-pub fn edit_body(payload: EditMessage) -> Body {
-  case edit_files(payload) {
-    [] -> body.json(edit_fields(payload))
-    files -> body.Form(payload: edit_fields(payload), files: file.parts(files))
+pub fn edit_body(edit: Edit) -> Body {
+  case edit_files(edit) {
+    [] -> body.json(edit_fields(edit))
+    files -> body.Form(payload: edit_fields(edit), files: file.parts(files))
   }
 }
 
-fn edit_fields(payload: EditMessage) -> List(#(String, Json)) {
-  wire.entries(edit_entries(payload))
+fn edit_fields(edit: Edit) -> List(#(String, Json)) {
+  wire.entries(edit_entries(edit))
 }
 
 /// The edit keys before the absent ones are dropped. Public because the
 /// interaction callback nests the same six keys under `data`.
-pub fn edit_entries(payload: EditMessage) -> List(#(String, Field(Json))) {
+pub fn edit_entries(edit: Edit) -> List(#(String, Field(Json))) {
   [
-    #("content", wire.put(payload.content, json.string)),
-    #("embeds", wire.put_list(payload.embeds, embed.to_json)),
-    #("flags", wire.put(payload.flags, flags.to_json)),
+    #("content", wire.put(edit.content, json.string)),
+    #("embeds", wire.put_list(edit.embeds, embed.to_json)),
+    #("flags", wire.put(edit.flags, flags.to_json)),
     #(
       "allowed_mentions",
       allowed_mentions.mention_policy(
-        payload.allowed_mentions,
-        content: payload.content,
-        components: payload.components,
+        edit.allowed_mentions,
+        content: edit.content,
+        components: edit.components,
       ),
     ),
-    #("components", wire.put_list(payload.components, component.to_json)),
-    #("attachments", file.attachments_field(payload.attachments)),
+    #("components", wire.put_list(edit.components, component.to_json)),
+    #("attachments", file.attachments_field(edit.attachments)),
   ]
 }
 
 /// The files the multipart body has to carry, in `files[n]` order.
-pub fn edit_files(payload: EditMessage) -> List(File) {
-  file.added_files(payload.attachments)
+pub fn edit_files(edit: Edit) -> List(File) {
+  file.added_files(edit.attachments)
 }
 
 /// `POST /channels/{c}/messages/bulk-delete`. Two to 100 ids, none older than
@@ -314,14 +395,4 @@ fn enforcement(policy: NoncePolicy) -> Field(Json) {
     NoNonce | UseNonce(enforce: False, ..) -> Absent
     UseNonce(enforce: True, ..) -> Present(json.bool(True))
   }
-}
-
-/// Append an embed. Repeated calls build the list up.
-pub fn embed(payload: CreateMessage, embed: Embed) -> CreateMessage {
-  CreateMessage(..payload, embeds: list.append(payload.embeds, [embed]))
-}
-
-/// Replaces the text, where `embed` appends.
-pub fn content(payload: CreateMessage, content: String) -> CreateMessage {
-  CreateMessage(..payload, content: Some(content))
 }

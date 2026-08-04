@@ -1,16 +1,20 @@
 import booklet.{type Booklet}
+import gleam/bit_array
 import gleam/dynamic/decode
-import gleam/http/response
+import gleam/http/request.{type Request}
+import gleam/http/response.{type Response}
 import gleam/int
 import gleam/json
 import gleam/list
 import gleeunit
 import glyde
 import glyde/api/channel
+import glyde/draft
 import glyde/event
 import glyde/id
 import glyde/intents
-import glyde/payload/message as outgoing
+import glyde/payload/embed
+import glyde/status
 import glyde/testing/frames
 import glyde/transport
 
@@ -26,7 +30,8 @@ type Step {
   /// A write the socket would not take.
   Refused(op: Int)
   Dropped
-  Posted(path: String)
+  /// `at` is the scripted clock, so a test can see a wait happen.
+  Posted(path: String, at: Int)
   Saw(what: String)
   /// A dispatch glyde models that its own decoder would not take.
   Undecodable(name: String)
@@ -44,19 +49,19 @@ pub fn a_scripted_session_test() {
   )
   |> glyde.with_transport(scripted(log))
   |> glyde.on_status(fn(_) { Nil })
-  |> glyde.on_ready(fn(_bot, pongs, ready) {
+  |> glyde.on_ready(fn(pongs, ready) {
     did(log, Saw("ready as " <> id.to_string(ready.me.user.id)))
-    pongs
+    glyde.continue(pongs)
   })
-  |> glyde.on_message(fn(bot, pongs, message) {
+  |> glyde.on_message(fn(pongs, message) {
     did(log, Saw("message " <> message.content))
-    glyde.reply(bot, message, "pong!")
-    pongs + 1
+    use _ <- glyde.reply(message, draft.text("pong!"))
+    glyde.continue(pongs + 1)
   })
-  // A second listener is handed what the first returned, not the turn's start.
-  |> glyde.on_message(fn(_bot, pongs, _message) {
+  // A second listener is handed what the first left, not the turn's start.
+  |> glyde.on_message(fn(pongs, _message) {
     did(log, Saw("tally " <> int.to_string(pongs)))
-    pongs
+    glyde.continue(pongs)
   })
   |> glyde.run
 
@@ -67,17 +72,59 @@ pub fn a_scripted_session_test() {
       Wrote(2),
       Saw("ready as 1000000000000000000"),
       Saw("message !ping"),
-      Posted("/api/v10/channels/1000000000000000002/messages"),
+      Posted(messages_path, at: 0),
       Saw("tally 1"),
       Saw("message !ping"),
-      Posted("/api/v10/channels/1000000000000000002/messages"),
+      Posted(messages_path, at: 0),
       Saw("tally 2"),
     ]
 }
 
-/// `call` hands the answer back rather than into a callback, so a handler can
-/// put what Discord said into the state it returns. The listener after it sees
-/// that state, which is the only way from out here to watch the answer travel.
+const messages_path: String = "/api/v10/channels/1000000000000000002/messages"
+
+/// `reply` takes a whole `Draft`, so an embed built in the handler has
+/// to reach the wire along with the reference `reply` adds.
+pub fn a_reply_carries_its_embed_to_the_wire_test() {
+  let log = booklet.new([])
+  let bodies = booklet.new([])
+  let card = embed.new() |> embed.title("pong") |> embed.color(0x5865F2)
+
+  glyde.new(
+    token: frames.token,
+    state: Nil,
+    intents: intents.new([intents.GuildMessages]),
+  )
+  |> glyde.with_transport(recording(log, bodies))
+  |> glyde.on_status(fn(_) { Nil })
+  |> glyde.on_message(fn(state, message) {
+    use _ <- glyde.reply(message, draft.text("hi") |> draft.embed(card))
+    glyde.continue(state)
+  })
+  |> glyde.run
+
+  let assert [first, ..] = list.reverse(booklet.get(bodies))
+  assert first
+    == "{\"content\":\"hi\",\"embeds\":[{\"title\":\"pong\",\"color\":5793266}],"
+    <> "\"message_reference\":{\"type\":0,\"message_id\":\"1000000000000000001\","
+    <> "\"fail_if_not_exists\":true}}"
+}
+
+/// `scripted`, keeping every request body as text.
+fn recording(
+  log: Booklet(List(Step)),
+  bodies: Booklet(List(String)),
+) -> transport.Transport {
+  let base = scripted(log)
+  transport.Transport(..base, request: fn(built: Request(BitArray)) {
+    let assert Ok(text) = bit_array.to_string(built.body)
+    booklet.update(bodies, fn(seen) { [text, ..seen] })
+    base.request(built)
+  })
+}
+
+/// `call` hands the answer to the rest of the handler, so what Discord said can
+/// go into the state it continues with. The listener after it sees that state,
+/// which is the only way from out here to watch the answer travel.
 pub fn a_call_answers_into_the_state_test() {
   let log = booklet.new([])
 
@@ -88,24 +135,377 @@ pub fn a_call_answers_into_the_state_test() {
   )
   |> glyde.with_transport(scripted(log))
   |> glyde.on_status(fn(_) { Nil })
-  |> glyde.on_message(fn(bot, last, message) {
+  |> glyde.on_message(fn(last, message) {
     let post =
       channel.create_message(
         message.channel_id,
-        outgoing.create_body(outgoing.text("pong!")),
+        draft.to_body(draft.text("pong!")),
       )
-    case glyde.call(bot, post) {
-      Ok(posted) -> id.to_string(posted.id)
-      Error(_) -> last
+    use answer <- glyde.call(post)
+    case answer {
+      Ok(posted) -> glyde.continue(id.to_string(posted.id))
+      Error(_) -> glyde.continue(last)
     }
   })
-  |> glyde.on_message(fn(_bot, last, _message) {
+  |> glyde.on_message(fn(last, _message) {
     did(log, Saw("posted " <> last))
-    last
+    glyde.continue(last)
   })
   |> glyde.run
 
   assert list.contains(booklet.get(log), Saw("posted 1000000000000000004"))
+}
+
+/// A 429 is the limiter's to deal with, not the handler's: the loop waits out
+/// the `retry-after` and sends again, and the handler only hears the answer
+/// that stuck.
+pub fn a_429_is_waited_out_and_retried_test() {
+  let log = booklet.new([])
+  let tries = booklet.new(0)
+
+  glyde.new(
+    token: frames.token,
+    state: Nil,
+    intents: intents.new([intents.GuildMessages]),
+  )
+  |> glyde.with_transport(
+    timed(log, [#(0, [create("1", channel_a)]), #(60_000, [fatal()])], fn(_) {
+      case bump(tries) {
+        1 -> too_fast("2", global: False)
+        _ -> created()
+      }
+    }),
+  )
+  |> glyde.on_status(fn(_) { Nil })
+  |> glyde.on_message(fn(state, message) {
+    use answer <- glyde.call(pong(message))
+    did(log, Saw(heard(message, answer)))
+    glyde.continue(state)
+  })
+  |> glyde.run
+
+  assert traffic(log)
+    == [Posted(path_a, at: 0), Posted(path_a, at: 2000), Saw("1: ok")]
+}
+
+/// A global 429 stops every route, not just the one that earned it. The first
+/// call's wait is past the cap, so it is failed rather than sat through; the
+/// second, to another channel six seconds later, is inside the cap and waits
+/// for the freeze to lift.
+pub fn a_global_429_holds_every_route_test() {
+  let log = booklet.new([])
+  let tries = booklet.new(0)
+
+  glyde.new(
+    token: frames.token,
+    state: Nil,
+    intents: intents.new([intents.GuildMessages]),
+  )
+  |> glyde.with_transport(
+    timed(
+      log,
+      [
+        #(0, [create("1", channel_a)]),
+        #(6000, [create("2", channel_b)]),
+        #(60_000, [fatal()]),
+      ],
+      fn(_) {
+        case bump(tries) {
+          1 -> too_fast("15", global: True)
+          _ -> created()
+        }
+      },
+    ),
+  )
+  |> glyde.on_status(fn(_) { Nil })
+  |> glyde.on_message(fn(state, message) {
+    use answer <- glyde.call(pong(message))
+    did(log, Saw(heard(message, answer)))
+    glyde.continue(state)
+  })
+  |> glyde.run
+
+  assert traffic(log)
+    == [
+      Posted(path_a, at: 0),
+      Saw("1: would block for 15000"),
+      Posted(path_b, at: 15_000),
+      Saw("2: ok"),
+    ]
+}
+
+/// One handler at a time, each to its end. The second message lands while the
+/// first handler is waiting out a 429; it is read off the socket then, but its
+/// handler runs only once the first has continued, and from the state the
+/// first left.
+pub fn handlers_do_not_interleave_test() {
+  let log = booklet.new([])
+  let tries = booklet.new(0)
+
+  glyde.new(
+    token: frames.token,
+    state: 0,
+    intents: intents.new([intents.GuildMessages]),
+  )
+  |> glyde.with_transport(
+    timed(
+      log,
+      [
+        #(0, [create("1", channel_a)]),
+        #(1000, [create("2", channel_a)]),
+        #(60_000, [fatal()]),
+      ],
+      fn(_) {
+        case bump(tries) {
+          1 -> too_fast("3", global: False)
+          _ -> created()
+        }
+      },
+    ),
+  )
+  |> glyde.on_status(fn(_) { Nil })
+  |> glyde.on_message(fn(handled, message) {
+    did(log, Saw(message.content <> " sees " <> int.to_string(handled)))
+    use _ <- glyde.call(pong(message))
+    glyde.continue(handled + 1)
+  })
+  |> glyde.run
+
+  assert traffic(log)
+    == [
+      Saw("1 sees 0"),
+      Posted(path_a, at: 0),
+      Posted(path_a, at: 3000),
+      Saw("2 sees 1"),
+      Posted(path_a, at: 3000),
+    ]
+}
+
+/// The wait for a permit happens on the socket, so a heartbeat that comes due
+/// in the middle of it still goes out. Beating every second across a five
+/// second wait, at least one has to land between the two attempts.
+pub fn the_heart_beats_through_a_limiter_wait_test() {
+  let log = booklet.new([])
+  let tries = booklet.new(0)
+
+  glyde.new(
+    token: frames.token,
+    state: Nil,
+    intents: intents.new([intents.GuildMessages]),
+  )
+  |> glyde.with_transport(
+    timed_beating(
+      log,
+      1000,
+      [#(0, [create("1", channel_a)]), #(20_000, [fatal()])],
+      fn(_) {
+        case bump(tries) {
+          1 -> too_fast("5", global: False)
+          _ -> created()
+        }
+      },
+    ),
+  )
+  |> glyde.on_status(fn(_) { Nil })
+  |> glyde.on_message(fn(state, message) {
+    use _ <- glyde.call(pong(message))
+    glyde.continue(state)
+  })
+  |> glyde.run
+
+  // Op 1 is a heartbeat.
+  let between =
+    list.reverse(booklet.get(log))
+    |> list.drop_while(fn(step) { step != Posted(path_a, at: 0) })
+    |> list.drop(1)
+    |> list.take_while(fn(step) { step != Posted(path_a, at: 5000) })
+  assert list.contains(booklet.get(log), Posted(path_a, at: 5000))
+  assert list.contains(between, Wrote(1))
+}
+
+const channel_a: String = "1000000000000000002"
+
+const path_a: String = "/api/v10/channels/1000000000000000002/messages"
+
+const channel_b: String = "1000000000000000009"
+
+const path_b: String = "/api/v10/channels/1000000000000000009/messages"
+
+fn pong(message: glyde.Message) -> glyde.Call(glyde.Message) {
+  channel.create_message(message.channel_id, draft.to_body(draft.text("pong!")))
+}
+
+fn heard(
+  message: glyde.Message,
+  answer: Result(a, status.CallFailure),
+) -> String {
+  message.content
+  <> ": "
+  <> case answer {
+    Ok(_) -> "ok"
+    Error(status.WouldBlock(wait_ms:)) ->
+      "would block for " <> int.to_string(wait_ms)
+    Error(_) -> "failed"
+  }
+}
+
+/// The REST calls and what the handlers saw, oldest first. Heartbeats land
+/// where the jitter puts them, so they are left out of an exact comparison.
+fn traffic(log: Booklet(List(Step))) -> List(Step) {
+  list.reverse(booklet.get(log))
+  |> list.filter(fn(step) {
+    case step {
+      Posted(..) | Saw(_) -> True
+      _ -> False
+    }
+  })
+}
+
+fn bump(counter: Booklet(Int)) -> Int {
+  booklet.update(counter, fn(count) { count + 1 })
+  booklet.get(counter)
+}
+
+fn create(id: String, channel: String) -> transport.Event {
+  transport.TextMessage(frames.dispatch(
+    "MESSAGE_CREATE",
+    2,
+    json.object([
+      #("id", json.string("100000000000000000" <> id)),
+      #("channel_id", json.string(channel)),
+      #("author", json.object([#("id", json.string("1000000000000000003"))])),
+      #("content", json.string(id)),
+    ]),
+  ))
+}
+
+/// 4004, which glyde reads as fatal, so the loop stops instead of redialling.
+fn fatal() -> transport.Event {
+  transport.Closed(4004, "Authentication failed")
+}
+
+fn created() -> Response(BitArray) {
+  response.set_body(response.new(200), <<
+    "{\"id\":\"1000000000000000004\",\"channel_id\":\"1000000000000000002\",\"author\":{\"id\":\"1000000000000000003\"}}":utf8,
+  >>)
+}
+
+/// Discord's 429, header and body both, the way `glyde/rest/headers` reads it.
+fn too_fast(seconds: String, global global: Bool) -> Response(BitArray) {
+  let scope = case global {
+    True -> "global"
+    False -> "user"
+  }
+  response.new(429)
+  |> response.set_header("retry-after", seconds)
+  |> response.set_header("x-ratelimit-scope", scope)
+  |> response.set_body(
+    json.object([
+      #("message", json.string("You are being rate limited.")),
+      #("retry_after", json.int(result_or_zero(int.parse(seconds)))),
+      #("global", json.bool(global)),
+    ])
+    |> json.to_string
+    |> to_bits,
+  )
+}
+
+fn result_or_zero(parsed: Result(Int, Nil)) -> Int {
+  case parsed {
+    Ok(value) -> value
+    Error(_) -> 0
+  }
+}
+
+fn to_bits(text: String) -> BitArray {
+  <<text:utf8>>
+}
+
+/// A transport against a scripted clock. Batches are due at a time: a turn
+/// hands over the next one if it falls inside the timeout, and otherwise moves
+/// the clock on by the timeout and comes back empty, which is what a real read
+/// timing out looks like. Heartbeats are acked on the turn after they go out.
+fn timed(
+  log: Booklet(List(Step)),
+  script: List(#(Int, List(transport.Event))),
+  answer: fn(Request(BitArray)) -> Response(BitArray),
+) -> transport.Transport {
+  timed_beating(log, 41_250, script, answer)
+}
+
+fn timed_beating(
+  log: Booklet(List(Step)),
+  interval: Int,
+  script: List(#(Int, List(transport.Event))),
+  answer: fn(Request(BitArray)) -> Response(BitArray),
+) -> transport.Transport {
+  let clock = booklet.new(0)
+  let owed = booklet.new(0)
+  let opening = [
+    #(0, [transport.Opened]),
+    #(0, [transport.TextMessage(frames.hello(interval))]),
+    #(0, [
+      transport.TextMessage(frames.ready(
+        1,
+        "timed-session",
+        "gateway-us-east1-b.discord.gg",
+      )),
+    ]),
+  ]
+
+  transport.Transport(
+    open: fn(url) {
+      did(log, Dialled(url))
+      live(log, clock, owed, list.append(opening, script))
+    },
+    request: fn(built) {
+      did(log, Posted(built.path, at: booklet.get(clock)))
+      Ok(answer(built))
+    },
+    now: fn() { booklet.get(clock) },
+    idle: fn(in_ms) { booklet.set(clock, booklet.get(clock) + in_ms) },
+  )
+}
+
+fn live(
+  log: Booklet(List(Step)),
+  clock: Booklet(Int),
+  owed: Booklet(Int),
+  remaining: List(#(Int, List(transport.Event))),
+) -> transport.Socket {
+  transport.Socket(
+    send: fn(text) {
+      let op = opcode(text)
+      did(log, Wrote(op))
+      case op {
+        1 -> booklet.set(owed, booklet.get(owed) + 1)
+        _ -> Nil
+      }
+      True
+    },
+    close: fn(_) { Nil },
+    drop: fn() { Nil },
+    turn: fn(in_ms) {
+      let now = booklet.get(clock)
+      case booklet.get(owed) > 0, remaining {
+        True, _ -> {
+          booklet.set(owed, 0)
+          #(live(log, clock, owed, remaining), [
+            transport.TextMessage(frames.ack()),
+          ])
+        }
+        False, [] -> #(live(log, clock, owed, []), [fatal()])
+        False, [#(at, batch), ..rest] if at <= now + in_ms -> {
+          booklet.set(clock, int.max(now, at))
+          #(live(log, clock, owed, rest), batch)
+        }
+        False, _ -> {
+          booklet.set(clock, now + in_ms)
+          #(live(log, clock, owed, remaining), [])
+        }
+      }
+    },
+  )
 }
 
 /// A write that comes back `False` is a socket that has already gone. The
@@ -150,19 +550,19 @@ pub fn schema_drift_reaches_the_status_handler_test() {
   |> glyde.with_transport(drifted(log))
   |> glyde.on_status(fn(status) {
     case status {
-      glyde.Undecodable(name:, errors:) -> {
+      status.Undecodable(name:, errors:) -> {
         assert errors != []
         did(log, Undecodable(name))
       }
       _ -> Nil
     }
   })
-  |> glyde.on_event(fn(_bot, state, seen) {
+  |> glyde.on_event(fn(state, seen) {
     case seen {
       event.Raw(name:, data: _) -> did(log, Saw("raw " <> name))
       _ -> Nil
     }
-    state
+    glyde.continue(state)
   })
   |> glyde.run
 
@@ -320,12 +720,8 @@ fn scripted(log: Booklet(List(Step))) -> transport.Transport {
       socket(log, script())
     },
     request: fn(built) {
-      did(log, Posted(built.path))
-      Ok(
-        response.set_body(response.new(200), <<
-          "{\"id\":\"1000000000000000004\",\"channel_id\":\"1000000000000000002\",\"author\":{\"id\":\"1000000000000000003\"}}":utf8,
-        >>),
-      )
+      did(log, Posted(built.path, at: 0))
+      Ok(created())
     },
     // A clock that never moves. The only timer that comes due is the dial
     // armed at zero.

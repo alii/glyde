@@ -3,6 +3,7 @@ import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
+import glyde/draft.{Edit}
 import glyde/field.{Null, Present}
 import glyde/id
 import glyde/model/application_command as model
@@ -15,7 +16,6 @@ import glyde/payload/interaction.{
   AutocompleteResult, ChannelMessageWithSource, DeferredChannelMessageWithSource,
   DeferredUpdateMessage, MessageCallbackData, Pong, UpdateMessage,
 }
-import glyde/payload/message.{EditMessage}
 import glyde/rest/body
 
 fn boundary() -> body.Boundary {
@@ -184,10 +184,7 @@ pub fn an_empty_update_changes_nothing_test() {
 /// Setting the content must not decide anything about the buttons.
 pub fn updating_the_content_leaves_the_components_alone_test() {
   let data =
-    EditMessage(
-      ..interaction.update_data(mentions.none()),
-      content: Present("Done"),
-    )
+    Edit(..interaction.update_data(mentions.none()), content: Present("Done"))
 
   assert encoded(UpdateMessage(data))
     == "{\"type\":7,\"data\":{\"content\":\"Done\","
@@ -197,10 +194,7 @@ pub fn updating_the_content_leaves_the_components_alone_test() {
 /// Leaving the key out keeps the buttons live.
 pub fn stripping_the_components_sends_an_empty_array_test() {
   let data =
-    EditMessage(
-      ..interaction.update_data(mentions.none()),
-      components: Present([]),
-    )
+    Edit(..interaction.update_data(mentions.none()), components: Present([]))
 
   assert encoded(UpdateMessage(data))
     == "{\"type\":7,\"data\":{"
@@ -219,7 +213,7 @@ pub fn the_three_states_of_an_updated_list_test() {
 
   list.each(cases, fn(row) {
     let #(embeds, expected) = row
-    let data = EditMessage(..base, embeds: embeds)
+    let data = Edit(..base, embeds: embeds)
 
     assert encoded(UpdateMessage(data)) == expected
   })
@@ -234,15 +228,15 @@ pub fn the_policy_rides_with_content_and_components_test() {
 
   let cases = [
     #(
-      EditMessage(..base, content: Present("@everyone hi")),
+      Edit(..base, content: Present("@everyone hi")),
       "{\"type\":7,\"data\":{\"content\":\"@everyone hi\"," <> policy <> "}}",
     ),
     #(
-      EditMessage(..base, components: Present([])),
+      Edit(..base, components: Present([])),
       "{\"type\":7,\"data\":{" <> policy <> ",\"components\":[]}}",
     ),
     #(
-      EditMessage(
+      Edit(
         ..base,
         flags: Present(
           model_message.message_flags(of: [model_message.SuppressEmbeds]),
@@ -261,7 +255,7 @@ pub fn the_policy_rides_with_content_and_components_test() {
 /// The rule governs whether the key is written, never what goes in it.
 pub fn the_callers_policy_is_never_rewritten_test() {
   let data =
-    EditMessage(
+    Edit(
       ..interaction.update_data(mentions.all() |> mentions.ping_reply(True)),
       content: Present("hi"),
     )
@@ -273,7 +267,7 @@ pub fn the_callers_policy_is_never_rewritten_test() {
 
 pub fn an_update_can_replace_the_attachments_test() {
   let data =
-    EditMessage(
+    Edit(
       ..interaction.update_data(mentions.none()),
       attachments: file.SetAttachments(keep: [], add: []),
     )
@@ -285,10 +279,7 @@ pub fn an_update_can_replace_the_attachments_test() {
 pub fn an_updated_component_row_is_handed_to_the_encoder_test() {
   let rows = component.rows([component.button("confirm", "Confirm")])
   let data =
-    EditMessage(
-      ..interaction.update_data(mentions.none()),
-      components: Present(rows),
-    )
+    Edit(..interaction.update_data(mentions.none()), components: Present(rows))
   let encoded_rows = json.to_string(json.array(rows, component.to_json))
 
   assert encoded(UpdateMessage(data))
@@ -365,7 +356,7 @@ pub fn an_update_uploads_only_what_it_adds_test() {
     file.file(filename: "new.png", content_type: "image/png", data: <<3>>)
 
   let data =
-    EditMessage(
+    Edit(
       ..interaction.update_data(mentions.none()),
       attachments: file.SetAttachments(keep: [], add: [added]),
     )
@@ -413,7 +404,7 @@ pub fn an_update_names_every_attachment_once_test() {
     file.file(filename: "new.png", content_type: "image/png", data: <<3>>)
 
   let data =
-    EditMessage(
+    Edit(
       ..interaction.update_data(mentions.none()),
       attachments: file.SetAttachments(
         keep: [file.keep(id.from_string("999888777"))],

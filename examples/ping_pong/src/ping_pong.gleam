@@ -5,6 +5,7 @@ import gleam/bool
 import gleam/int
 import gleam/io
 import glyde
+import glyde/draft
 import glyde/intents
 
 pub fn main() -> Nil {
@@ -19,15 +20,15 @@ pub fn main() -> Nil {
       intents.MessageContent,
     ]),
   )
-  |> glyde.on_ready(fn(_bot, pongs, ready) {
+  |> glyde.on_ready(fn(pongs, ready) {
     io.println("logged in as " <> ready.me.user.username)
-    pongs
+    glyde.continue(pongs)
   })
-  |> glyde.on_message(fn(bot, pongs, message) {
-    use <- bool.guard(message.content != "!ping", pongs)
-    let pongs = pongs + 1
-    glyde.reply(bot, message, "pong! #" <> int.to_string(pongs))
-    pongs
+  |> glyde.on_message(fn(pongs, message) {
+    use <- bool.guard(message.content != "!ping", glyde.continue(pongs))
+    let pong = draft.text("pong! #" <> int.to_string(pongs + 1))
+    use _ <- glyde.reply(message, pong)
+    glyde.continue(pongs + 1)
   })
   |> glyde.run
 }
