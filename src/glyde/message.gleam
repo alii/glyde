@@ -1169,7 +1169,12 @@ pub fn reply(
   to: Message,
   draft: Draft,
 ) -> Result(Message, api.CallFailure) {
-  send(api, to.channel_id, reply_to(draft, to.id))
+  api.execute(api, reply_call(to, draft))
+}
+
+/// The `Call` for `reply`, for building the request without sending it.
+pub fn reply_call(to: Message, draft: Draft) -> Call(Message) {
+  send_call(to.channel_id, reply_to(draft, to.id))
 }
 
 /// `PATCH /channels/{channel.id}/messages/{message.id}`, as Edit Message.
@@ -1178,7 +1183,12 @@ pub fn edit(
   msg: Message,
   edit: Edit,
 ) -> Result(Message, api.CallFailure) {
-  edit_id(api, msg.channel_id, msg.id, edit)
+  api.execute(api, edit_call(msg, edit))
+}
+
+/// The `Call` for `edit`, for building the request without sending it.
+pub fn edit_call(msg: Message, edit: Edit) -> Call(Message) {
+  edit_id_call(msg.channel_id, msg.id, edit)
 }
 
 /// `edit` for a caller who only has the ids.
