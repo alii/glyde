@@ -1,5 +1,5 @@
 name = "glyde"
-version = "0.0.1"
+version = "0.0.2"
 
 description = "A modern Discord client for Gleam!"
 licences = ["Apache-2.0"]
