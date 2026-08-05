@@ -6,23 +6,14 @@ licences = ["Apache-2.0"]
 repository = { type = "github", user = "alii", repo = "glyde" }
 # links = [{ title = "Website", href = "" }]
 
-# The state machines are sans-IO and pure: no sockets, no timers, no clock, no
-# randomness. They import stdlib and nothing else, whatever is in this list.
-#
-# `glyde/transport/erlang` is the built-in adapter and the only module that
-# touches gleam_httpc. `glyde`, `glyde/api` and the internal actors are the
-# supervision tree, and the only modules that touch gleam_otp and gleam_erlang.
 [dependencies]
 gleam_stdlib = ">= 1.0.0 and < 2.0.0"
 gleam_json = ">= 3.0.0 and < 4.0.0"
 gleam_http = ">= 4.0.0 and < 5.0.0"
-# The HTTP client the built-in transport sends with.
 gleam_httpc = ">= 5.0.0 and < 6.0.0"
-# The supervision tree under `glyde.start`.
 gleam_otp = ">= 1.2.0 and < 2.0.0"
 gleam_erlang = ">= 1.3.0 and < 2.0.0"
 
 [dev_dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
-# A mutable cell, for the log the scripted transport in the tests writes to.
 booklet = ">= 1.1.0 and < 2.0.0"
