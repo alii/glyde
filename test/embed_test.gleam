@@ -256,7 +256,7 @@ pub fn an_embed_becomes_a_request_test() {
     |> embed.color(0x5865F2)
 
   let call =
-    message.send(
+    message.send_call(
       id.from_string("41771983423143937"),
       message.text("release") |> message.embed(card),
     )

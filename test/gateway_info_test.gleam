@@ -150,8 +150,8 @@ fn answer(call: rest.Call(a), body: String) -> Result(a, rest.Failure) {
 
 /// A `Call` carries the decoder for the response, not only the path.
 pub fn the_endpoints_decode_their_own_responses_test() {
-  assert answer(gateway_info.get_bot(), live_bot) == Ok(live())
-  assert answer(gateway_info.get(), url_only)
+  assert answer(gateway_info.get_bot_call(), live_bot) == Ok(live())
+  assert answer(gateway_info.get_call(), url_only)
     == Ok(GatewayInfo(
       url: "wss://gateway.discord.gg",
       dial_host: host("gateway.discord.gg"),

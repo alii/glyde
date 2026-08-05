@@ -16,6 +16,7 @@ import gleam/int
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import glyde/api
 import glyde/application_command
 import glyde/attachment
 import glyde/channel
@@ -1237,6 +1238,15 @@ pub fn responder(
 /// `POST /interactions/{interaction.id}/{token}/callback`, the first answer.
 /// Answers 204: use `callback_with_response` if you need the message id.
 pub fn callback(
+  api: api.Api,
+  responder: Responder,
+  response: InteractionResponse,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, callback_call(responder, response))
+}
+
+/// The `Call` for [callback], for building the request without sending it.
+pub fn callback_call(
   responder: Responder,
   response: InteractionResponse,
 ) -> Call(Nil) {
@@ -1250,6 +1260,16 @@ pub fn callback(
 /// `POST /interactions/{interaction.id}/{token}/callback?with_response=true`,
 /// answering 200 with the callback resource instead of 204.
 pub fn callback_with_response(
+  api: api.Api,
+  responder: Responder,
+  response: InteractionResponse,
+) -> Result(InteractionCallbackResponse, api.CallFailure) {
+  api.execute(api, callback_with_response_call(responder, response))
+}
+
+/// The `Call` for [callback_with_response], for building the request without
+/// sending it.
+pub fn callback_with_response_call(
   responder: Responder,
   response: InteractionResponse,
 ) -> Call(InteractionCallbackResponse) {
@@ -1262,58 +1282,128 @@ pub fn callback_with_response(
 }
 
 /// `GET /webhooks/{application.id}/{token}/messages/@original`.
-pub fn get_original_response(responder: Responder) -> Call(message.Message) {
-  webhook.get_original_message(as_webhook(responder), thread: None)
+pub fn get_original_response(
+  api: api.Api,
+  responder: Responder,
+) -> Result(message.Message, api.CallFailure) {
+  api.execute(api, get_original_response_call(responder))
+}
+
+/// The `Call` for [get_original_response], for building the request without
+/// sending it.
+pub fn get_original_response_call(
+  responder: Responder,
+) -> Call(message.Message) {
+  webhook.get_original_message_call(as_webhook(responder), thread: None)
 }
 
 /// `PATCH /webhooks/{application.id}/{token}/messages/@original`. Turns a
 /// deferred response into a real one, and edits one already sent.
 pub fn edit_original_response(
+  api: api.Api,
+  responder: Responder,
+  body: Body,
+) -> Result(message.Message, api.CallFailure) {
+  api.execute(api, edit_original_response_call(responder, body))
+}
+
+/// The `Call` for [edit_original_response], for building the request without
+/// sending it.
+pub fn edit_original_response_call(
   responder: Responder,
   body: Body,
 ) -> Call(message.Message) {
-  webhook.edit_original_message(as_webhook(responder), body, thread: None)
+  webhook.edit_original_message_call(as_webhook(responder), body, thread: None)
 }
 
 /// `DELETE /webhooks/{application.id}/{token}/messages/@original`, which
 /// works on an ephemeral response as well.
-pub fn delete_original_response(responder: Responder) -> Call(Nil) {
-  webhook.delete_original_message(as_webhook(responder), thread: None)
+pub fn delete_original_response(
+  api: api.Api,
+  responder: Responder,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, delete_original_response_call(responder))
+}
+
+/// The `Call` for [delete_original_response], for building the request
+/// without sending it.
+pub fn delete_original_response_call(responder: Responder) -> Call(Nil) {
+  webhook.delete_original_message_call(as_webhook(responder), thread: None)
 }
 
 /// `POST /webhooks/{application.id}/{token}?wait=true`, an extra message on
 /// the same interaction. Capped at five when the app is user-installed and not
 /// a member of the server, `40094` past that.
 pub fn create_followup(
+  api: api.Api,
+  responder: Responder,
+  body: Body,
+) -> Result(message.Message, api.CallFailure) {
+  api.execute(api, create_followup_call(responder, body))
+}
+
+/// The `Call` for [create_followup], for building the request without sending
+/// it.
+pub fn create_followup_call(
   responder: Responder,
   body: Body,
 ) -> Call(message.Message) {
-  webhook.execute_and_wait(as_webhook(responder), body, thread: None)
+  webhook.execute_and_wait_call(as_webhook(responder), body, thread: None)
 }
 
 /// `GET /webhooks/{application.id}/{token}/messages/{message.id}`.
 pub fn get_followup(
+  api: api.Api,
+  responder: Responder,
+  message: id.MessageId,
+) -> Result(message.Message, api.CallFailure) {
+  api.execute(api, get_followup_call(responder, message))
+}
+
+/// The `Call` for [get_followup], for building the request without sending it.
+pub fn get_followup_call(
   responder: Responder,
   message: id.MessageId,
 ) -> Call(message.Message) {
-  webhook.get_message(as_webhook(responder), message, thread: None)
+  webhook.get_message_call(as_webhook(responder), message, thread: None)
 }
 
 /// `PATCH /webhooks/{application.id}/{token}/messages/{message.id}`.
 pub fn edit_followup(
+  api: api.Api,
+  responder: Responder,
+  message: id.MessageId,
+  body: Body,
+) -> Result(message.Message, api.CallFailure) {
+  api.execute(api, edit_followup_call(responder, message, body))
+}
+
+/// The `Call` for [edit_followup], for building the request without sending
+/// it.
+pub fn edit_followup_call(
   responder: Responder,
   message: id.MessageId,
   body: Body,
 ) -> Call(message.Message) {
-  webhook.edit_message(as_webhook(responder), message, body, thread: None)
+  webhook.edit_message_call(as_webhook(responder), message, body, thread: None)
 }
 
 /// `DELETE /webhooks/{application.id}/{token}/messages/{message.id}`.
 pub fn delete_followup(
+  api: api.Api,
+  responder: Responder,
+  message: id.MessageId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, delete_followup_call(responder, message))
+}
+
+/// The `Call` for [delete_followup], for building the request without sending
+/// it.
+pub fn delete_followup_call(
   responder: Responder,
   message: id.MessageId,
 ) -> Call(Nil) {
-  webhook.delete_message(as_webhook(responder), message, thread: None)
+  webhook.delete_message_call(as_webhook(responder), message, thread: None)
 }
 
 // -- Shortcuts ---------------------------------------------------------------
@@ -1326,8 +1416,20 @@ pub fn delete_followup(
 /// Reply with a message. Callback type 4. The first response owed within
 /// three seconds; past that Discord drops the interaction and this call
 /// answers 404. `defer` first if the reply takes longer to build.
-pub fn respond(interaction: Interaction, draft: message.Draft) -> Call(Nil) {
-  callback(
+pub fn respond(
+  api: api.Api,
+  interaction: Interaction,
+  draft: message.Draft,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, respond_call(interaction, draft))
+}
+
+/// The bare `Call`, for driving `glyde/rest` yourself.
+pub fn respond_call(
+  interaction: Interaction,
+  draft: message.Draft,
+) -> Call(Nil) {
+  callback_call(
     responding_to(interaction),
     ChannelMessageWithSource(from_draft(draft)),
   )
@@ -1337,8 +1439,16 @@ pub fn respond(interaction: Interaction, draft: message.Draft) -> Call(Nil) {
 /// three seconds, then finish with `edit_response`. The reply is public: the
 /// eventual edit cannot make it ephemeral, so pick `defer_ephemeral` now if
 /// only the invoker should see it.
-pub fn defer(interaction: Interaction) -> Call(Nil) {
-  callback(
+pub fn defer(
+  api: api.Api,
+  interaction: Interaction,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, defer_call(interaction))
+}
+
+/// The `Call` for [defer], for building the request without sending it.
+pub fn defer_call(interaction: Interaction) -> Call(Nil) {
+  callback_call(
     responding_to(interaction),
     DeferredChannelMessageWithSource(ephemeral: False),
   )
@@ -1346,8 +1456,17 @@ pub fn defer(interaction: Interaction) -> Call(Nil) {
 
 /// `defer` with the reply visible only to the invoker. Fixed at defer time:
 /// the eventual `edit_response` cannot change it back to public.
-pub fn defer_ephemeral(interaction: Interaction) -> Call(Nil) {
-  callback(
+pub fn defer_ephemeral(
+  api: api.Api,
+  interaction: Interaction,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, defer_ephemeral_call(interaction))
+}
+
+/// The `Call` for [defer_ephemeral], for building the request without sending
+/// it.
+pub fn defer_ephemeral_call(interaction: Interaction) -> Call(Nil) {
+  callback_call(
     responding_to(interaction),
     DeferredChannelMessageWithSource(ephemeral: True),
   )
@@ -1356,19 +1475,41 @@ pub fn defer_ephemeral(interaction: Interaction) -> Call(Nil) {
 /// Turn a deferred response into a real one, or edit one already sent.
 /// `PATCH /webhooks/{application.id}/{token}/messages/@original`.
 pub fn edit_response(
+  api: api.Api,
+  interaction: Interaction,
+  edit: message.Edit,
+) -> Result(message.Message, api.CallFailure) {
+  api.execute(api, edit_response_call(interaction, edit))
+}
+
+/// The `Call` for [edit_response], for building the request without sending
+/// it.
+pub fn edit_response_call(
   interaction: Interaction,
   edit: message.Edit,
 ) -> Call(message.Message) {
-  edit_original_response(responding_to(interaction), message.edit_body(edit))
+  edit_original_response_call(
+    responding_to(interaction),
+    message.edit_body(edit),
+  )
 }
 
 /// A second message on the same interaction, after `respond` or `defer` has
 /// answered it. `POST /webhooks/{application.id}/{token}?wait=true`.
 pub fn followup(
+  api: api.Api,
+  interaction: Interaction,
+  draft: message.Draft,
+) -> Result(message.Message, api.CallFailure) {
+  api.execute(api, followup_call(interaction, draft))
+}
+
+/// The `Call` for [followup], for building the request without sending it.
+pub fn followup_call(
   interaction: Interaction,
   draft: message.Draft,
 ) -> Call(message.Message) {
-  create_followup(responding_to(interaction), message.to_body(draft))
+  create_followup_call(responding_to(interaction), message.to_body(draft))
 }
 
 /// This route is `route.Unbound`: it sits in no bucket, so the token cannot

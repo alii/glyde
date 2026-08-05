@@ -217,7 +217,7 @@ fn message_rows() -> List(Row) {
   [
     row(
       "1 get messages",
-      message.list(channel_id(), cursor: None, limit: None),
+      message.list_call(channel_id(), cursor: None, limit: None),
       http.Get,
       messages_path(),
       "/channels/{channel.id}/messages",
@@ -225,7 +225,7 @@ fn message_rows() -> List(Row) {
     ),
     row(
       "2 get message",
-      message.get(channel_id(), message_id()),
+      message.get_call(channel_id(), message_id()),
       http.Get,
       one_message_path(),
       "/channels/{channel.id}/messages/{id}",
@@ -233,7 +233,7 @@ fn message_rows() -> List(Row) {
     ),
     row(
       "3 create message",
-      message.send(channel_id(), message.new()),
+      message.send_call(channel_id(), message.new()),
       http.Post,
       messages_path(),
       "/channels/{channel.id}/messages",
@@ -241,7 +241,7 @@ fn message_rows() -> List(Row) {
     ),
     row(
       "4 edit message",
-      message.edit_id(
+      message.edit_id_call(
         channel_id(),
         message_id(),
         message.new_edit(mentions.none()),
@@ -253,7 +253,7 @@ fn message_rows() -> List(Row) {
     ),
     row(
       "5 delete message",
-      message.delete_id(channel_id(), message_id()),
+      message.delete_id_call(channel_id(), message_id()),
       http.Delete,
       one_message_path(),
       "/channels/{channel.id}/messages/{id}",
@@ -261,7 +261,7 @@ fn message_rows() -> List(Row) {
     ),
     row(
       "6 bulk delete",
-      message.bulk_delete(channel_id(), []),
+      message.bulk_delete_call(channel_id(), []),
       http.Post,
       messages_path() <> "/bulk-delete",
       "/channels/{channel.id}/messages/bulk-delete",
@@ -282,7 +282,7 @@ fn reaction_rows() -> List(Row) {
   [
     row(
       "7 create reaction",
-      message.react_id(channel_id(), message_id(), fire()),
+      message.react_id_call(channel_id(), message_id(), fire()),
       http.Put,
       reactions_path() <> "/" <> fire_encoded <> "/@me",
       reaction_template,
@@ -290,7 +290,7 @@ fn reaction_rows() -> List(Row) {
     ),
     row(
       "8 delete own reaction",
-      message.unreact_id(channel_id(), message_id(), fire()),
+      message.unreact_id_call(channel_id(), message_id(), fire()),
       http.Delete,
       reactions_path() <> "/" <> fire_encoded <> "/@me",
       reaction_template,
@@ -298,7 +298,12 @@ fn reaction_rows() -> List(Row) {
     ),
     row(
       "9 delete user reaction",
-      message.remove_reaction_id(channel_id(), message_id(), fire(), user_id()),
+      message.remove_reaction_id_call(
+        channel_id(),
+        message_id(),
+        fire(),
+        user_id(),
+      ),
       http.Delete,
       reactions_path() <> "/" <> fire_encoded <> "/" <> user_text,
       reaction_template,
@@ -306,7 +311,7 @@ fn reaction_rows() -> List(Row) {
     ),
     row(
       "10 get reactions",
-      message.reactions_id(
+      message.reactions_id_call(
         channel_id(),
         message_id(),
         fire(),
@@ -321,7 +326,7 @@ fn reaction_rows() -> List(Row) {
     ),
     row(
       "11 delete emoji reactions",
-      message.clear_emoji_reactions_id(channel_id(), message_id(), fire()),
+      message.clear_emoji_reactions_id_call(channel_id(), message_id(), fire()),
       http.Delete,
       reactions_path() <> "/" <> fire_encoded,
       reaction_template,
@@ -329,7 +334,7 @@ fn reaction_rows() -> List(Row) {
     ),
     row(
       "12 delete all reactions",
-      message.clear_reactions_id(channel_id(), message_id()),
+      message.clear_reactions_id_call(channel_id(), message_id()),
       http.Delete,
       reactions_path(),
       "/channels/{channel.id}/messages/{id}/reactions",
@@ -346,7 +351,7 @@ fn pin_and_typing_rows() -> List(Row) {
   [
     row(
       "13 get pins",
-      message.pins(channel_id(), before: None, limit: None),
+      message.pins_call(channel_id(), before: None, limit: None),
       http.Get,
       pins_path(),
       "/channels/{channel.id}/messages/pins",
@@ -354,7 +359,7 @@ fn pin_and_typing_rows() -> List(Row) {
     ),
     row(
       "14 pin message",
-      message.pin_id(channel_id(), message_id()),
+      message.pin_id_call(channel_id(), message_id()),
       http.Put,
       pins_path() <> "/" <> message_text,
       "/channels/{channel.id}/messages/pins/{id}",
@@ -362,7 +367,7 @@ fn pin_and_typing_rows() -> List(Row) {
     ),
     row(
       "15 unpin message",
-      message.unpin_id(channel_id(), message_id()),
+      message.unpin_id_call(channel_id(), message_id()),
       http.Delete,
       pins_path() <> "/" <> message_text,
       "/channels/{channel.id}/messages/pins/{id}",
@@ -370,7 +375,7 @@ fn pin_and_typing_rows() -> List(Row) {
     ),
     row(
       "16 trigger typing",
-      channel.typing(channel_id()),
+      channel.typing_call(channel_id()),
       http.Post,
       "/channels/" <> channel_text <> "/typing",
       "/channels/{channel.id}/typing",
@@ -387,7 +392,7 @@ fn channel_rows() -> List(Row) {
   [
     row(
       "17 get channel",
-      channel.get(channel_id()),
+      channel.get_call(channel_id()),
       http.Get,
       channel_path(),
       "/channels/{channel.id}",
@@ -395,7 +400,7 @@ fn channel_rows() -> List(Row) {
     ),
     row(
       "18 edit channel",
-      channel.edit(channel_id(), channel.edit_guild_channel()),
+      channel.edit_call(channel_id(), channel.edit_guild_channel()),
       http.Patch,
       channel_path(),
       "/channels/{channel.id}",
@@ -403,7 +408,7 @@ fn channel_rows() -> List(Row) {
     ),
     row(
       "19 delete channel",
-      channel.delete(channel_id()),
+      channel.delete_call(channel_id()),
       http.Delete,
       channel_path(),
       "/channels/{channel.id}",
@@ -411,7 +416,10 @@ fn channel_rows() -> List(Row) {
     ),
     row(
       "20 edit channel permissions",
-      channel.set_permission(channel_id(), channel.role_overwrite(role_id())),
+      channel.set_permission_call(
+        channel_id(),
+        channel.role_overwrite(role_id()),
+      ),
       http.Put,
       channel_path() <> "/permissions/" <> role_text,
       "/channels/{channel.id}/permissions/{id}",
@@ -419,7 +427,7 @@ fn channel_rows() -> List(Row) {
     ),
     row(
       "21 delete channel permission",
-      channel.clear_permission(channel_id(), overwrite_id()),
+      channel.clear_permission_call(channel_id(), overwrite_id()),
       http.Delete,
       channel_path() <> "/permissions/" <> overwrite_text,
       "/channels/{channel.id}/permissions/{id}",
@@ -436,7 +444,7 @@ fn thread_rows() -> List(Row) {
   [
     row(
       "24 start thread from message",
-      channel.start_thread_from_message(
+      channel.start_thread_from_message_call(
         channel_id(),
         message_id(),
         channel.create_thread_from_message("t"),
@@ -448,7 +456,7 @@ fn thread_rows() -> List(Row) {
     ),
     row(
       "25 start thread",
-      channel.start_thread(
+      channel.start_thread_call(
         channel_id(),
         channel.create_thread("t", channel.AsPublicThread),
       ),
@@ -459,7 +467,7 @@ fn thread_rows() -> List(Row) {
     ),
     row(
       "26 join thread",
-      channel.join_thread(channel_id()),
+      channel.join_thread_call(channel_id()),
       http.Put,
       thread_members_path() <> "/@me",
       "/channels/{channel.id}/thread-members/@me",
@@ -467,7 +475,7 @@ fn thread_rows() -> List(Row) {
     ),
     row(
       "27 leave thread",
-      channel.leave_thread(channel_id()),
+      channel.leave_thread_call(channel_id()),
       http.Delete,
       thread_members_path() <> "/@me",
       "/channels/{channel.id}/thread-members/@me",
@@ -475,7 +483,7 @@ fn thread_rows() -> List(Row) {
     ),
     row(
       "28 add thread member",
-      channel.add_thread_member(channel_id(), user_id()),
+      channel.add_thread_member_call(channel_id(), user_id()),
       http.Put,
       thread_members_path() <> "/" <> user_text,
       "/channels/{channel.id}/thread-members/{id}",
@@ -483,7 +491,7 @@ fn thread_rows() -> List(Row) {
     ),
     row(
       "29 remove thread member",
-      channel.remove_thread_member(channel_id(), user_id()),
+      channel.remove_thread_member_call(channel_id(), user_id()),
       http.Delete,
       thread_members_path() <> "/" <> user_text,
       "/channels/{channel.id}/thread-members/{id}",
@@ -491,7 +499,11 @@ fn thread_rows() -> List(Row) {
     ),
     row(
       "31 public archived threads",
-      channel.public_archived_threads(channel_id(), before: None, limit: None),
+      channel.public_archived_threads_call(
+        channel_id(),
+        before: None,
+        limit: None,
+      ),
       http.Get,
       channel_path() <> "/threads/archived/public",
       "/channels/{channel.id}/threads/archived/public",
@@ -499,7 +511,11 @@ fn thread_rows() -> List(Row) {
     ),
     row(
       "32 private archived threads",
-      channel.private_archived_threads(channel_id(), before: None, limit: None),
+      channel.private_archived_threads_call(
+        channel_id(),
+        before: None,
+        limit: None,
+      ),
       http.Get,
       channel_path() <> "/threads/archived/private",
       "/channels/{channel.id}/threads/archived/private",
@@ -516,7 +532,7 @@ fn guild_rows() -> List(Row) {
   [
     row(
       "22 get guild channels",
-      guild.channels(guild_id()),
+      guild.channels_call(guild_id()),
       http.Get,
       guild_path() <> "/channels",
       "/guilds/{guild.id}/channels",
@@ -524,7 +540,7 @@ fn guild_rows() -> List(Row) {
     ),
     row(
       "23 create guild channel",
-      guild.create_channel(guild_id(), channel.create_channel("test")),
+      guild.create_channel_call(guild_id(), channel.create_channel("test")),
       http.Post,
       guild_path() <> "/channels",
       "/guilds/{guild.id}/channels",
@@ -532,7 +548,7 @@ fn guild_rows() -> List(Row) {
     ),
     row(
       "30 active threads",
-      guild.active_threads(guild_id()),
+      guild.active_threads_call(guild_id()),
       http.Get,
       guild_path() <> "/threads/active",
       "/guilds/{guild.id}/threads/active",
@@ -540,7 +556,7 @@ fn guild_rows() -> List(Row) {
     ),
     row(
       "33 get guild",
-      guild.get(guild_id(), with_counts: True),
+      guild.get_call(guild_id(), with_counts: True),
       http.Get,
       guild_path() <> "?with_counts=true",
       "/guilds/{guild.id}",
@@ -548,7 +564,7 @@ fn guild_rows() -> List(Row) {
     ),
     row(
       "34 get bans",
-      guild.bans(guild_id(), cursor: None, limit: None),
+      guild.bans_call(guild_id(), cursor: None, limit: None),
       http.Get,
       guild_path() <> "/bans",
       "/guilds/{guild.id}/bans",
@@ -556,7 +572,7 @@ fn guild_rows() -> List(Row) {
     ),
     row(
       "35 get ban",
-      guild.ban_for(guild_id(), user_id()),
+      guild.ban_for_call(guild_id(), user_id()),
       http.Get,
       guild_path() <> "/bans/" <> user_text,
       "/guilds/{guild.id}/bans/{id}",
@@ -564,7 +580,7 @@ fn guild_rows() -> List(Row) {
     ),
     row(
       "36 create ban",
-      guild.ban(guild_id(), user_id(), guild.create_ban()),
+      guild.ban_call(guild_id(), user_id(), guild.create_ban()),
       http.Put,
       guild_path() <> "/bans/" <> user_text,
       "/guilds/{guild.id}/bans/{id}",
@@ -572,7 +588,7 @@ fn guild_rows() -> List(Row) {
     ),
     row(
       "37 remove ban",
-      guild.unban(guild_id(), user_id()),
+      guild.unban_call(guild_id(), user_id()),
       http.Delete,
       guild_path() <> "/bans/" <> user_text,
       "/guilds/{guild.id}/bans/{id}",
@@ -589,7 +605,7 @@ fn member_rows() -> List(Row) {
   [
     row(
       "38 get members",
-      guild.members(guild_id(), after: None, limit: None),
+      guild.members_call(guild_id(), after: None, limit: None),
       http.Get,
       members_path(),
       "/guilds/{guild.id}/members",
@@ -597,7 +613,7 @@ fn member_rows() -> List(Row) {
     ),
     row(
       "39 get member",
-      guild.member(guild_id(), user_id()),
+      guild.member_call(guild_id(), user_id()),
       http.Get,
       members_path() <> "/" <> user_text,
       "/guilds/{guild.id}/members/{id}",
@@ -605,7 +621,7 @@ fn member_rows() -> List(Row) {
     ),
     row(
       "40 search members",
-      guild.search_members(guild_id(), query: "ali", limit: None),
+      guild.search_members_call(guild_id(), query: "ali", limit: None),
       http.Get,
       members_path() <> "/search?query=ali",
       "/guilds/{guild.id}/members/search",
@@ -613,7 +629,7 @@ fn member_rows() -> List(Row) {
     ),
     row(
       "41 edit member",
-      guild.edit_member(guild_id(), user_id(), member.edit_guild_member()),
+      guild.edit_member_call(guild_id(), user_id(), member.edit_guild_member()),
       http.Patch,
       members_path() <> "/" <> user_text,
       "/guilds/{guild.id}/members/{id}",
@@ -621,7 +637,7 @@ fn member_rows() -> List(Row) {
     ),
     row(
       "42 edit current member",
-      guild.edit_me(guild_id(), member.edit_current_member()),
+      guild.edit_me_call(guild_id(), member.edit_current_member()),
       http.Patch,
       members_path() <> "/@me",
       "/guilds/{guild.id}/members/@me",
@@ -629,7 +645,7 @@ fn member_rows() -> List(Row) {
     ),
     row(
       "43 kick member",
-      guild.kick(guild_id(), user_id()),
+      guild.kick_call(guild_id(), user_id()),
       http.Delete,
       members_path() <> "/" <> user_text,
       "/guilds/{guild.id}/members/{id}",
@@ -637,7 +653,7 @@ fn member_rows() -> List(Row) {
     ),
     row(
       "44 add member role",
-      guild.add_role(guild_id(), user_id(), role_id()),
+      guild.add_role_call(guild_id(), user_id(), role_id()),
       http.Put,
       members_path() <> "/" <> user_text <> "/roles/" <> role_text,
       "/guilds/{guild.id}/members/{id}/roles/{id}",
@@ -645,7 +661,7 @@ fn member_rows() -> List(Row) {
     ),
     row(
       "45 remove member role",
-      guild.remove_role(guild_id(), user_id(), role_id()),
+      guild.remove_role_call(guild_id(), user_id(), role_id()),
       http.Delete,
       members_path() <> "/" <> user_text <> "/roles/" <> role_text,
       "/guilds/{guild.id}/members/{id}/roles/{id}",
@@ -662,7 +678,7 @@ fn role_rows() -> List(Row) {
   [
     row(
       "46 get roles",
-      guild.roles(guild_id()),
+      guild.roles_call(guild_id()),
       http.Get,
       roles_path(),
       "/guilds/{guild.id}/roles",
@@ -670,7 +686,7 @@ fn role_rows() -> List(Row) {
     ),
     row(
       "47 get role",
-      guild.role(guild_id(), role_id()),
+      guild.role_call(guild_id(), role_id()),
       http.Get,
       roles_path() <> "/" <> role_text,
       "/guilds/{guild.id}/roles/{id}",
@@ -678,7 +694,7 @@ fn role_rows() -> List(Row) {
     ),
     row(
       "48 create role",
-      guild.create_role(guild_id(), role.create_role()),
+      guild.create_role_call(guild_id(), role.create_role()),
       http.Post,
       roles_path(),
       "/guilds/{guild.id}/roles",
@@ -686,7 +702,7 @@ fn role_rows() -> List(Row) {
     ),
     row(
       "49 edit role",
-      guild.edit_role(guild_id(), role_id(), role.edit_role()),
+      guild.edit_role_call(guild_id(), role_id(), role.edit_role()),
       http.Patch,
       roles_path() <> "/" <> role_text,
       "/guilds/{guild.id}/roles/{id}",
@@ -694,7 +710,7 @@ fn role_rows() -> List(Row) {
     ),
     row(
       "50 delete role",
-      guild.delete_role(guild_id(), role_id()),
+      guild.delete_role_call(guild_id(), role_id()),
       http.Delete,
       roles_path() <> "/" <> role_text,
       "/guilds/{guild.id}/roles/{id}",
@@ -707,7 +723,7 @@ fn user_rows() -> List(Row) {
   [
     row(
       "51 get current user",
-      user.me(),
+      user.me_call(),
       http.Get,
       "/users/@me",
       "/users/@me",
@@ -715,7 +731,7 @@ fn user_rows() -> List(Row) {
     ),
     row(
       "52 get user",
-      user.get(user_id()),
+      user.get_call(user_id()),
       http.Get,
       "/users/" <> user_text,
       "/users/{id}",
@@ -723,7 +739,7 @@ fn user_rows() -> List(Row) {
     ),
     row(
       "53 create dm",
-      channel.open_dm(user_id()),
+      channel.open_dm_call(user_id()),
       http.Post,
       "/users/@me/channels",
       "/users/@me/channels",
@@ -731,7 +747,7 @@ fn user_rows() -> List(Row) {
     ),
     row(
       "54 get current user guilds",
-      guild.mine(cursor: None, limit: None, with_counts: False),
+      guild.mine_call(cursor: None, limit: None, with_counts: False),
       http.Get,
       "/users/@me/guilds?with_counts=false",
       "/users/@me/guilds",
@@ -739,7 +755,7 @@ fn user_rows() -> List(Row) {
     ),
     row(
       "55 get current user guild member",
-      guild.my_member(guild_id()),
+      guild.my_member_call(guild_id()),
       http.Get,
       "/users/@me/guilds/" <> guild_text <> "/member",
       "/users/@me/guilds/{id}/member",
@@ -747,7 +763,7 @@ fn user_rows() -> List(Row) {
     ),
     row(
       "56 leave guild",
-      guild.leave(guild_id()),
+      guild.leave_call(guild_id()),
       http.Delete,
       "/users/@me/guilds/" <> guild_text,
       "/users/@me/guilds/{id}",
@@ -776,7 +792,7 @@ fn command_rows() -> List(Row) {
   [
     row(
       "57 get global commands",
-      application_command.get_global_commands(
+      application_command.get_global_commands_call(
         application_id(),
         with_localizations: False,
       ),
@@ -787,7 +803,7 @@ fn command_rows() -> List(Row) {
     ),
     row(
       "58 create global command",
-      application_command.create_global_command(
+      application_command.create_global_command_call(
         application_id(),
         global_slash_command(),
       ),
@@ -798,7 +814,10 @@ fn command_rows() -> List(Row) {
     ),
     row(
       "59 get global command",
-      application_command.get_global_command(application_id(), command_id()),
+      application_command.get_global_command_call(
+        application_id(),
+        command_id(),
+      ),
       http.Get,
       global_commands_path() <> "/" <> command_text,
       global_commands_template <> "/{id}",
@@ -806,7 +825,7 @@ fn command_rows() -> List(Row) {
     ),
     row(
       "60 edit global command",
-      application_command.edit_global_command(
+      application_command.edit_global_command_call(
         application_id(),
         command_id(),
         application_command.edit_global(),
@@ -818,7 +837,10 @@ fn command_rows() -> List(Row) {
     ),
     row(
       "61 delete global command",
-      application_command.delete_global_command(application_id(), command_id()),
+      application_command.delete_global_command_call(
+        application_id(),
+        command_id(),
+      ),
       http.Delete,
       global_commands_path() <> "/" <> command_text,
       global_commands_template <> "/{id}",
@@ -826,7 +848,7 @@ fn command_rows() -> List(Row) {
     ),
     row(
       "62 set global commands",
-      application_command.set_global_commands(application_id(), [
+      application_command.set_global_commands_call(application_id(), [
         global_slash_command(),
       ]),
       http.Put,
@@ -836,7 +858,7 @@ fn command_rows() -> List(Row) {
     ),
     row(
       "63 get guild commands",
-      application_command.get_guild_commands(
+      application_command.get_guild_commands_call(
         application_id(),
         guild_id(),
         with_localizations: True,
@@ -848,7 +870,7 @@ fn command_rows() -> List(Row) {
     ),
     row(
       "64 create guild command",
-      application_command.create_guild_command(
+      application_command.create_guild_command_call(
         application_id(),
         guild_id(),
         slash_command(),
@@ -860,7 +882,7 @@ fn command_rows() -> List(Row) {
     ),
     row(
       "65 get guild command",
-      application_command.get_guild_command(
+      application_command.get_guild_command_call(
         application_id(),
         guild_id(),
         command_id(),
@@ -872,7 +894,7 @@ fn command_rows() -> List(Row) {
     ),
     row(
       "66 edit guild command",
-      application_command.edit_guild_command(
+      application_command.edit_guild_command_call(
         application_id(),
         guild_id(),
         command_id(),
@@ -885,7 +907,7 @@ fn command_rows() -> List(Row) {
     ),
     row(
       "67 delete guild command",
-      application_command.delete_guild_command(
+      application_command.delete_guild_command_call(
         application_id(),
         guild_id(),
         command_id(),
@@ -897,7 +919,7 @@ fn command_rows() -> List(Row) {
     ),
     row(
       "68 set guild commands",
-      application_command.set_guild_commands(application_id(), guild_id(), [
+      application_command.set_guild_commands_call(application_id(), guild_id(), [
         slash_command(),
       ]),
       http.Put,
@@ -912,7 +934,7 @@ fn interaction_rows() -> List(Row) {
   [
     row(
       "69 interaction callback",
-      interaction.callback(responder(), interaction.Pong),
+      interaction.callback_call(responder(), interaction.Pong),
       http.Post,
       "/interactions/"
         <> interaction_text
@@ -939,7 +961,7 @@ fn webhook_rows() -> List(Row) {
   [
     row(
       "70 get original",
-      webhook.get_original_message(webhook_credential(), thread: None),
+      webhook.get_original_message_call(webhook_credential(), thread: None),
       http.Get,
       webhook_path() <> "/messages/@original",
       webhook_template <> "/messages/@original",
@@ -947,7 +969,7 @@ fn webhook_rows() -> List(Row) {
     ),
     row(
       "71 edit original",
-      webhook.edit_original_message(
+      webhook.edit_original_message_call(
         webhook_credential(),
         payload(),
         thread: None,
@@ -959,7 +981,7 @@ fn webhook_rows() -> List(Row) {
     ),
     row(
       "72 delete original",
-      webhook.delete_original_message(webhook_credential(), thread: None),
+      webhook.delete_original_message_call(webhook_credential(), thread: None),
       http.Delete,
       webhook_path() <> "/messages/@original",
       webhook_template <> "/messages/@original",
@@ -967,7 +989,7 @@ fn webhook_rows() -> List(Row) {
     ),
     row(
       "73 execute webhook",
-      webhook.execute(webhook_credential(), payload(), thread: None),
+      webhook.execute_call(webhook_credential(), payload(), thread: None),
       http.Post,
       webhook_path(),
       webhook_template,
@@ -975,7 +997,7 @@ fn webhook_rows() -> List(Row) {
     ),
     row(
       "74 get webhook message",
-      webhook.get_message(webhook_credential(), message_id(), thread: None),
+      webhook.get_message_call(webhook_credential(), message_id(), thread: None),
       http.Get,
       webhook_path() <> "/messages/" <> message_text,
       webhook_template <> "/messages/{id}",
@@ -983,7 +1005,7 @@ fn webhook_rows() -> List(Row) {
     ),
     row(
       "75 edit webhook message",
-      webhook.edit_message(
+      webhook.edit_message_call(
         webhook_credential(),
         message_id(),
         payload(),
@@ -996,7 +1018,11 @@ fn webhook_rows() -> List(Row) {
     ),
     row(
       "76 delete webhook message",
-      webhook.delete_message(webhook_credential(), message_id(), thread: None),
+      webhook.delete_message_call(
+        webhook_credential(),
+        message_id(),
+        thread: None,
+      ),
       http.Delete,
       webhook_path() <> "/messages/" <> message_text,
       webhook_template <> "/messages/{id}",
@@ -1009,7 +1035,7 @@ fn gateway_info_rows() -> List(Row) {
   [
     row(
       "77 get gateway",
-      gateway_info.get(),
+      gateway_info.get_call(),
       http.Get,
       "/gateway",
       "/gateway",
@@ -1017,7 +1043,7 @@ fn gateway_info_rows() -> List(Row) {
     ),
     row(
       "78 get gateway bot",
-      gateway_info.get_bot(),
+      gateway_info.get_bot_call(),
       http.Get,
       "/gateway/bot",
       "/gateway/bot",
@@ -1079,14 +1105,14 @@ pub fn a_message_cursor_emits_exactly_one_parameter_test() {
 
   list.each(cursors, fn(row) {
     let #(cursor, expected) = row
-    let call = message.list(channel_id(), cursor: cursor, limit: None)
+    let call = message.list_call(channel_id(), cursor: cursor, limit: None)
     assert query_of(call) == expected
   })
 }
 
 pub fn a_cursor_and_a_limit_travel_together_test() {
   let call =
-    message.list(
+    message.list_call(
       channel_id(),
       cursor: Some(message.After(message_id())),
       limit: Some(100),
@@ -1099,7 +1125,7 @@ pub fn a_cursor_and_a_limit_travel_together_test() {
 /// `type` are ones Discord accepts.
 pub fn a_reaction_type_renders_as_its_number_test() {
   let reactions = fn(type_) {
-    message.reactions_id(
+    message.reactions_id_call(
       channel_id(),
       message_id(),
       fire(),
@@ -1116,7 +1142,7 @@ pub fn a_reaction_type_renders_as_its_number_test() {
 
 /// Zero is a value. A library that treats it as absence cannot express it.
 pub fn a_zero_limit_is_sent_test() {
-  let call = message.list(channel_id(), cursor: None, limit: Some(0))
+  let call = message.list_call(channel_id(), cursor: None, limit: Some(0))
 
   assert query_of(call) == "?limit=0"
 }
@@ -1124,7 +1150,9 @@ pub fn a_zero_limit_is_sent_test() {
 /// The same one-cursor rule on the two id cursors: `before` and `after` page
 /// in opposite directions, and neither type can hold both.
 pub fn an_id_cursor_emits_exactly_one_parameter_test() {
-  let bans = fn(cursor) { guild.bans(guild_id(), cursor: cursor, limit: None) }
+  let bans = fn(cursor) {
+    guild.bans_call(guild_id(), cursor: cursor, limit: None)
+  }
 
   assert query_of(bans(None)) == ""
   assert query_of(bans(Some(query.Before(user_id()))))
@@ -1132,7 +1160,7 @@ pub fn an_id_cursor_emits_exactly_one_parameter_test() {
   assert query_of(bans(Some(query.After(user_id())))) == "?after=" <> user_text
 
   let mine = fn(cursor) {
-    guild.mine(cursor: cursor, limit: None, with_counts: False)
+    guild.mine_call(cursor: cursor, limit: None, with_counts: False)
   }
 
   assert query_of(mine(Some(query.Before(guild_id()))))
@@ -1145,7 +1173,7 @@ pub fn an_id_cursor_emits_exactly_one_parameter_test() {
 /// a cursor of their own and a message id will not compile into one.
 pub fn a_time_cursor_travels_as_a_timestamp_test() {
   let before = channel.at_time("2021-04-20T20:40:30.000Z")
-  let call = message.pins(channel_id(), before: Some(before), limit: None)
+  let call = message.pins_call(channel_id(), before: Some(before), limit: None)
 
   assert query_of(call) == "?before=2021-04-20T20%3A40%3A30.000Z"
 }
@@ -1157,8 +1185,8 @@ pub fn the_name_or_topic_bucket_splits_the_channel_patch_test() {
   let base = channel.edit_guild_channel()
   let renaming = channel.EditGuildChannel(..base, name: Some("general"))
 
-  let plain = channel.edit(channel_id(), base)
-  let split = channel.edit(channel_id(), renaming)
+  let plain = channel.edit_call(channel_id(), base)
+  let split = channel.edit_call(channel_id(), renaming)
 
   assert route.sublimit(rest.route(plain)) == route.NoSublimit
   assert route.sublimit(rest.route(split)) == route.Named("name-or-topic")
@@ -1166,7 +1194,7 @@ pub fn the_name_or_topic_bucket_splits_the_channel_patch_test() {
 
   // A thread edit at the same URL splits on name too.
   let thread = channel.EditThread(..channel.new_edit_thread(), name: Some("t"))
-  let split_thread = channel.edit_thread(channel_id(), thread)
+  let split_thread = channel.edit_thread_call(channel_id(), thread)
   assert route.sublimit(rest.route(split_thread))
     == route.Named("name-or-topic")
 }
@@ -1186,7 +1214,7 @@ pub fn reaction_emoji_encoding_test() {
 
   list.each(cases, fn(row) {
     let #(reaction, expected) = row
-    let call = message.react_id(channel_id(), message_id(), reaction)
+    let call = message.react_id_call(channel_id(), message_id(), reaction)
     assert path_of(call) == reactions_path() <> "/" <> expected <> "/@me"
   })
 }
@@ -1206,7 +1234,11 @@ pub fn a_wire_emoji_becomes_a_reaction_param_test() {
   list.each(cases, fn(row) {
     let #(sent, expected) = row
     let call =
-      message.react_id(channel_id(), message_id(), message.reaction_emoji(sent))
+      message.react_id_call(
+        channel_id(),
+        message_id(),
+        message.reaction_emoji(sent),
+      )
     assert path_of(call) == reactions_path() <> "/" <> expected <> "/@me"
   })
 }
@@ -1215,11 +1247,16 @@ pub fn a_wire_emoji_becomes_a_reaction_param_test() {
 /// Clearing them all has no emoji to collapse, so it keeps its own.
 pub fn every_named_reaction_route_shares_one_template_test() {
   let named = [
-    message.react_id(channel_id(), message_id(), fire()),
-    message.unreact_id(channel_id(), message_id(), fire()),
-    message.remove_reaction_id(channel_id(), message_id(), fire(), user_id()),
-    message.clear_emoji_reactions_id(channel_id(), message_id(), fire()),
-    message.clear_emoji_reactions_id(
+    message.react_id_call(channel_id(), message_id(), fire()),
+    message.unreact_id_call(channel_id(), message_id(), fire()),
+    message.remove_reaction_id_call(
+      channel_id(),
+      message_id(),
+      fire(),
+      user_id(),
+    ),
+    message.clear_emoji_reactions_id_call(channel_id(), message_id(), fire()),
+    message.clear_emoji_reactions_id_call(
       channel_id(),
       message_id(),
       message.custom_emoji(id.from_string(emoji_text), "shrug"),
@@ -1229,16 +1266,16 @@ pub fn every_named_reaction_route_shares_one_template_test() {
   let templates = list.map(named, fn(call) { route.template(rest.route(call)) })
   assert set.size(set.from_list(templates)) == 1
 
-  let all = message.clear_reactions_id(channel_id(), message_id())
+  let all = message.clear_reactions_id_call(channel_id(), message_id())
   assert route.template(rest.route(all)) != reaction_template
 }
 
 /// `@me` is a literal, so editing your own member is a different bucket from
 /// editing somebody else's.
 pub fn at_me_is_not_an_id_test() {
-  let mine = guild.edit_me(guild_id(), member.edit_current_member())
+  let mine = guild.edit_me_call(guild_id(), member.edit_current_member())
   let theirs =
-    guild.edit_member(guild_id(), user_id(), member.edit_guild_member())
+    guild.edit_member_call(guild_id(), user_id(), member.edit_guild_member())
 
   assert route.template(rest.route(mine)) != route.template(rest.route(theirs))
 }
@@ -1246,8 +1283,8 @@ pub fn at_me_is_not_an_id_test() {
 /// Listing roles and moving them share a path, so the method is part of the
 /// key or one inherits the other's budget.
 pub fn the_method_separates_two_routes_on_one_path_test() {
-  let listing = guild.roles(guild_id())
-  let creating = guild.create_role(guild_id(), role.create_role())
+  let listing = guild.roles_call(guild_id())
+  let creating = guild.create_role_call(guild_id(), role.create_role())
 
   assert route.template(rest.route(listing))
     == route.template(rest.route(creating))
@@ -1259,12 +1296,12 @@ pub fn the_method_separates_two_routes_on_one_path_test() {
 /// even though the application id comes first in the path.
 pub fn guild_commands_take_the_guild_major_test() {
   let global =
-    application_command.get_global_commands(
+    application_command.get_global_commands_call(
       application_id(),
       with_localizations: False,
     )
   let in_guild =
-    application_command.get_guild_commands(
+    application_command.get_guild_commands_call(
       application_id(),
       guild_id(),
       with_localizations: False,
@@ -1279,8 +1316,8 @@ pub fn guild_commands_take_the_guild_major_test() {
 
 /// Two guilds must not share a bucket, or one busy server stalls the rest.
 pub fn two_guilds_are_two_buckets_test() {
-  let first = guild.roles(guild_id())
-  let second = guild.roles(id.from_string("81384788765712384"))
+  let first = guild.roles_call(guild_id())
+  let second = guild.roles_call(id.from_string("81384788765712384"))
 
   assert route.template(rest.route(first)) == route.template(rest.route(second))
   assert route.key(rest.route(first), now_ms: 0)
@@ -1290,8 +1327,8 @@ pub fn two_guilds_are_two_buckets_test() {
 /// A webhook token belongs in the major parameter, never the template, which
 /// is the half of the route a log or a metric label is likely to carry.
 pub fn tokens_stay_out_of_templates_test() {
-  let followup = interaction.create_followup(responder(), payload())
-  let callback = interaction.callback(responder(), interaction.Pong)
+  let followup = interaction.create_followup_call(responder(), payload())
+  let callback = interaction.callback_call(responder(), interaction.Pong)
 
   // The two decode different types, so they do not fit in one list.
   list.each([rest.route(followup), rest.route(callback)], fn(found) {
@@ -1304,9 +1341,9 @@ pub fn tokens_stay_out_of_templates_test() {
 /// A follow-up route is the webhook route with the application id in the
 /// webhook id's place.
 pub fn a_followup_is_a_webhook_call_test() {
-  let as_interaction = interaction.get_original_response(responder())
+  let as_interaction = interaction.get_original_response_call(responder())
   let as_webhook =
-    webhook.get_original_message(
+    webhook.get_original_message_call(
       webhook.credential(id.from_string(application_text), interaction_token),
       thread: None,
     )
@@ -1319,9 +1356,9 @@ pub fn a_followup_is_a_webhook_call_test() {
 /// `wait` changes what comes back, so it is two functions and not a boolean.
 pub fn waiting_on_a_webhook_is_a_query_parameter_test() {
   let fire_and_forget =
-    webhook.execute(webhook_credential(), payload(), thread: None)
+    webhook.execute_call(webhook_credential(), payload(), thread: None)
   let waiting =
-    webhook.execute_and_wait(webhook_credential(), payload(), thread: None)
+    webhook.execute_and_wait_call(webhook_credential(), payload(), thread: None)
 
   assert query_of(fire_and_forget) == ""
   assert query_of(waiting) == "?wait=true"
@@ -1331,7 +1368,7 @@ pub fn waiting_on_a_webhook_is_a_query_parameter_test() {
 
 pub fn a_thread_id_targets_a_thread_test() {
   let call =
-    webhook.execute_and_wait(
+    webhook.execute_and_wait_call(
       webhook_credential(),
       payload(),
       thread: Some(thread_id()),
@@ -1349,13 +1386,14 @@ fn authorization_of(call: rest.Call(a)) -> Result(String, Nil) {
 /// there is about that path credential and nothing else.
 pub fn a_path_credential_replaces_the_bot_token_test() {
   let sent =
-    webhook.execute(webhook_credential(), payload(), thread: None)
+    webhook.execute_call(webhook_credential(), payload(), thread: None)
     |> authorization_of
   let answered =
-    authorization_of(interaction.callback(responder(), interaction.Pong))
+    authorization_of(interaction.callback_call(responder(), interaction.Pong))
   let followed_up =
-    authorization_of(interaction.create_followup(responder(), payload()))
-  let ordinary = authorization_of(message.send(channel_id(), message.new()))
+    authorization_of(interaction.create_followup_call(responder(), payload()))
+  let ordinary =
+    authorization_of(message.send_call(channel_id(), message.new()))
 
   assert sent == Error(Nil)
   assert answered == Error(Nil)
@@ -1364,8 +1402,9 @@ pub fn a_path_credential_replaces_the_bot_token_test() {
 }
 
 pub fn a_callback_can_ask_for_its_response_test() {
-  let quiet = interaction.callback(responder(), interaction.Pong)
-  let loud = interaction.callback_with_response(responder(), interaction.Pong)
+  let quiet = interaction.callback_call(responder(), interaction.Pong)
+  let loud =
+    interaction.callback_with_response_call(responder(), interaction.Pong)
 
   assert query_of(quiet) == ""
   assert query_of(loud) == "?with_response=true"
@@ -1395,9 +1434,9 @@ pub fn a_message_knows_when_it_was_created_test() {
 /// so the route carries the age. Editing the same message does not.
 pub fn deleting_a_message_is_bucketed_by_its_age_test() {
   let born = id.created_at_ms_or(message_id(), default: id.discord_epoch_ms)
-  let deleting = rest.route(message.delete_id(channel_id(), message_id()))
+  let deleting = rest.route(message.delete_id_call(channel_id(), message_id()))
   let editing =
-    rest.route(message.edit_id(
+    rest.route(message.edit_id_call(
       channel_id(),
       message_id(),
       message.new_edit(mentions.none()),
@@ -1414,13 +1453,13 @@ pub fn deleting_a_message_is_bucketed_by_its_age_test() {
 
 /// A 204 route has nothing to decode, and an empty body is not a failure.
 pub fn a_no_content_route_decodes_nothing_test() {
-  let call = channel.typing(channel_id())
+  let call = channel.typing_call(channel_id())
   assert rest.response(call, status: 204, headers: [], body: <<>>) == Ok(Nil)
 }
 
 /// A wrapped endpoint answers in the model.
 pub fn a_json_route_decodes_into_its_model_test() {
-  let call = message.get(channel_id(), message_id())
+  let call = message.get_call(channel_id(), message_id())
 
   let assert Ok(fetched) =
     rest.response(call, status: 200, headers: [], body: <<

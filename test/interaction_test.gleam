@@ -54,7 +54,7 @@ pub fn decodes_a_ping_test() {
 
   // The token is opaque, so read it back the way a caller does: through the
   // callback route it authorises.
-  let call = interaction.callback(interaction.responding_to(ping), Pong)
+  let call = interaction.callback_call(interaction.responding_to(ping), Pong)
   let sent = rest.request(rest.config(rest.unauthenticated()), call)
   assert string.contains(sent.path, "secret")
 }
@@ -1400,7 +1400,7 @@ const original_path: String = "/api/v10/webhooks/1234567890123456789/aW50ZXJhY3R
 const followup_path: String = "/api/v10/webhooks/1234567890123456789/aW50ZXJhY3Rpb24udG9rZW4"
 
 pub fn respond_posts_a_type_4_callback_test() {
-  let sent = built(interaction.respond(command(), message.text("hello")))
+  let sent = built(interaction.respond_call(command(), message.text("hello")))
 
   assert sent.method == http.Post
   assert sent.path == callback_path
@@ -1409,7 +1409,7 @@ pub fn respond_posts_a_type_4_callback_test() {
 }
 
 pub fn defer_posts_a_bare_type_5_callback_test() {
-  let sent = built(interaction.defer(command()))
+  let sent = built(interaction.defer_call(command()))
 
   assert sent.method == http.Post
   assert sent.path == callback_path
@@ -1417,7 +1417,7 @@ pub fn defer_posts_a_bare_type_5_callback_test() {
 }
 
 pub fn defer_ephemeral_sets_only_the_ephemeral_flag_test() {
-  let sent = built(interaction.defer_ephemeral(command()))
+  let sent = built(interaction.defer_ephemeral_call(command()))
 
   assert sent.method == http.Post
   assert sent.path == callback_path
@@ -1427,7 +1427,7 @@ pub fn defer_ephemeral_sets_only_the_ephemeral_flag_test() {
 pub fn edit_response_patches_the_original_message_test() {
   let edit =
     message.Edit(..message.new_edit(mentions.none()), content: Present("done"))
-  let sent = built(interaction.edit_response(command(), edit))
+  let sent = built(interaction.edit_response_call(command(), edit))
 
   assert sent.method == http.Patch
   assert sent.path == original_path
@@ -1438,7 +1438,7 @@ pub fn edit_response_patches_the_original_message_test() {
 }
 
 pub fn followup_posts_to_the_webhook_and_waits_test() {
-  let sent = built(interaction.followup(command(), message.text("more")))
+  let sent = built(interaction.followup_call(command(), message.text("more")))
 
   assert sent.method == http.Post
   assert sent.path == followup_path

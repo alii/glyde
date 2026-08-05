@@ -18,6 +18,7 @@ import gleam/int
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import glyde/api
 import glyde/attachment.{type EditAttachments, type File, KeepAttachments}
 import glyde/channel
 import glyde/component
@@ -1104,6 +1105,16 @@ pub type MessageCursor {
 /// no cursor, which Discord reads as the newest messages. Discord caps `limit`
 /// at 100 and defaults it to 50.
 pub fn list(
+  api: api.Api,
+  channel: id.ChannelId,
+  cursor cursor: Option(MessageCursor),
+  limit limit: Option(Int),
+) -> Result(List(Message), api.CallFailure) {
+  api.execute(api, list_call(channel, cursor:, limit:))
+}
+
+/// The `Call` for [list], for building the request without sending it.
+pub fn list_call(
   channel: id.ChannelId,
   cursor cursor: Option(MessageCursor),
   limit limit: Option(Int),
@@ -1124,28 +1135,64 @@ fn cursor_param(cursor: Option(MessageCursor)) -> List(query.Param) {
 }
 
 /// `GET /channels/{channel.id}/messages/{message.id}`, as Get Channel Message.
-pub fn get(channel: id.ChannelId, message: id.MessageId) -> Call(Message) {
+pub fn get(
+  api: api.Api,
+  channel: id.ChannelId,
+  message: id.MessageId,
+) -> Result(Message, api.CallFailure) {
+  api.execute(api, get_call(channel, message))
+}
+
+/// The `Call` for [get], for building the request without sending it.
+pub fn get_call(channel: id.ChannelId, message: id.MessageId) -> Call(Message) {
   rest.get(message_at(channel, message), rest.Decoded(decoder()))
 }
 
 /// `POST /channels/{channel.id}/messages`, as Create Message.
-pub fn send(channel: id.ChannelId, draft: Draft) -> Call(Message) {
+pub fn send(
+  api: api.Api,
+  channel: id.ChannelId,
+  draft: Draft,
+) -> Result(Message, api.CallFailure) {
+  api.execute(api, send_call(channel, draft))
+}
+
+/// The bare `Call`, for driving `glyde/rest` yourself.
+pub fn send_call(channel: id.ChannelId, draft: Draft) -> Call(Message) {
   rest.post(messages_at(channel), to_body(draft), rest.Decoded(decoder()))
 }
 
-/// `send(to.channel_id, draft |> reply_to(to.id))`, so Discord shows it
+/// `send(api, to.channel_id, draft |> reply_to(to.id))`, so Discord shows it
 /// attached to the message rather than as a bare post.
-pub fn reply(to: Message, draft: Draft) -> Call(Message) {
-  send(to.channel_id, reply_to(draft, to.id))
+pub fn reply(
+  api: api.Api,
+  to: Message,
+  draft: Draft,
+) -> Result(Message, api.CallFailure) {
+  send(api, to.channel_id, reply_to(draft, to.id))
 }
 
 /// `PATCH /channels/{channel.id}/messages/{message.id}`, as Edit Message.
-pub fn edit(msg: Message, edit: Edit) -> Call(Message) {
-  edit_id(msg.channel_id, msg.id, edit)
+pub fn edit(
+  api: api.Api,
+  msg: Message,
+  edit: Edit,
+) -> Result(Message, api.CallFailure) {
+  edit_id(api, msg.channel_id, msg.id, edit)
 }
 
 /// `edit` for a caller who only has the ids.
 pub fn edit_id(
+  api: api.Api,
+  channel: id.ChannelId,
+  message: id.MessageId,
+  edit: Edit,
+) -> Result(Message, api.CallFailure) {
+  api.execute(api, edit_id_call(channel, message, edit))
+}
+
+/// The bare `Call`, for driving `glyde/rest` yourself.
+pub fn edit_id_call(
   channel: id.ChannelId,
   message: id.MessageId,
   edit: Edit,
@@ -1158,14 +1205,31 @@ pub fn edit_id(
 }
 
 /// `DELETE /channels/{channel.id}/messages/{message.id}`, as Delete Message.
-pub fn delete(msg: Message) -> Call(Nil) {
-  delete_id(msg.channel_id, msg.id)
+pub fn delete(api: api.Api, msg: Message) -> Result(Nil, api.CallFailure) {
+  api.execute(api, delete_call(msg))
+}
+
+/// The `Call` for [delete], for building the request without sending it.
+pub fn delete_call(msg: Message) -> Call(Nil) {
+  delete_id_call(msg.channel_id, msg.id)
 }
 
 /// `delete` for a caller who only has the ids. Discord splits this route into
 /// three buckets by the target's age and reports none of it in the headers
 /// (discord-api-docs#1092, #1295), so `route.Aged` carries the age.
-pub fn delete_id(channel: id.ChannelId, message: id.MessageId) -> Call(Nil) {
+pub fn delete_id(
+  api: api.Api,
+  channel: id.ChannelId,
+  message: id.MessageId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, delete_id_call(channel, message))
+}
+
+/// The `Call` for [delete_id], for building the request without sending it.
+pub fn delete_id_call(
+  channel: id.ChannelId,
+  message: id.MessageId,
+) -> Call(Nil) {
   rest.delete(message_at(channel, message), rest.NoContent(Nil))
   // `id.from_string` does not validate, so the id may not be a snowflake.
   // Discord's epoch is the safe answer: slowest bucket, and outside the
@@ -1177,6 +1241,15 @@ pub fn delete_id(channel: id.ChannelId, message: id.MessageId) -> Call(Nil) {
 /// Messages. Discord takes 2 to 100 ids and rejects the whole request if any
 /// message is over two weeks old.
 pub fn bulk_delete(
+  api: api.Api,
+  channel: id.ChannelId,
+  messages: List(id.MessageId),
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, bulk_delete_call(channel, messages))
+}
+
+/// The `Call` for [bulk_delete], for building the request without sending it.
+pub fn bulk_delete_call(
   channel: id.ChannelId,
   messages: List(id.MessageId),
 ) -> Call(Nil) {
@@ -1225,12 +1298,31 @@ fn reaction_type(kind: ReactionType) -> String {
 }
 
 /// `PUT .../reactions/{emoji}/@me`, as Create Reaction.
-pub fn react(msg: Message, emoji: ReactionEmoji) -> Call(Nil) {
-  react_id(msg.channel_id, msg.id, emoji)
+pub fn react(
+  api: api.Api,
+  msg: Message,
+  emoji: ReactionEmoji,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, react_call(msg, emoji))
+}
+
+/// The `Call` for [react], for building the request without sending it.
+pub fn react_call(msg: Message, emoji: ReactionEmoji) -> Call(Nil) {
+  react_id_call(msg.channel_id, msg.id, emoji)
 }
 
 /// `react` for a caller who only has the ids.
 pub fn react_id(
+  api: api.Api,
+  channel: id.ChannelId,
+  message: id.MessageId,
+  emoji: ReactionEmoji,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, react_id_call(channel, message, emoji))
+}
+
+/// The `Call` for [react_id], for building the request without sending it.
+pub fn react_id_call(
   channel: id.ChannelId,
   message: id.MessageId,
   emoji: ReactionEmoji,
@@ -1243,12 +1335,31 @@ pub fn react_id(
 }
 
 /// `DELETE .../reactions/{emoji}/@me`, as Delete Own Reaction.
-pub fn unreact(msg: Message, emoji: ReactionEmoji) -> Call(Nil) {
-  unreact_id(msg.channel_id, msg.id, emoji)
+pub fn unreact(
+  api: api.Api,
+  msg: Message,
+  emoji: ReactionEmoji,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, unreact_call(msg, emoji))
+}
+
+/// The `Call` for [unreact], for building the request without sending it.
+pub fn unreact_call(msg: Message, emoji: ReactionEmoji) -> Call(Nil) {
+  unreact_id_call(msg.channel_id, msg.id, emoji)
 }
 
 /// `unreact` for a caller who only has the ids.
 pub fn unreact_id(
+  api: api.Api,
+  channel: id.ChannelId,
+  message: id.MessageId,
+  emoji: ReactionEmoji,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, unreact_id_call(channel, message, emoji))
+}
+
+/// The `Call` for [unreact_id], for building the request without sending it.
+pub fn unreact_id_call(
   channel: id.ChannelId,
   message: id.MessageId,
   emoji: ReactionEmoji,
@@ -1261,15 +1372,38 @@ pub fn unreact_id(
 
 /// `DELETE .../reactions/{emoji}/{user.id}`, as Delete User Reaction.
 pub fn remove_reaction(
+  api: api.Api,
+  msg: Message,
+  emoji: ReactionEmoji,
+  user: id.UserId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, remove_reaction_call(msg, emoji, user))
+}
+
+/// The `Call` for [remove_reaction], for building the request without sending
+/// it.
+pub fn remove_reaction_call(
   msg: Message,
   emoji: ReactionEmoji,
   user: id.UserId,
 ) -> Call(Nil) {
-  remove_reaction_id(msg.channel_id, msg.id, emoji, user)
+  remove_reaction_id_call(msg.channel_id, msg.id, emoji, user)
 }
 
 /// `remove_reaction` for a caller who only has the ids.
 pub fn remove_reaction_id(
+  api: api.Api,
+  channel: id.ChannelId,
+  message: id.MessageId,
+  emoji: ReactionEmoji,
+  user: id.UserId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, remove_reaction_id_call(channel, message, emoji, user))
+}
+
+/// The `Call` for [remove_reaction_id], for building the request without
+/// sending it.
+pub fn remove_reaction_id_call(
   channel: id.ChannelId,
   message: id.MessageId,
   emoji: ReactionEmoji,
@@ -1283,17 +1417,45 @@ pub fn remove_reaction_id(
 
 /// `GET .../reactions/{emoji}`, as Get Reactions: the users who reacted.
 pub fn reactions(
+  api: api.Api,
+  msg: Message,
+  emoji: ReactionEmoji,
+  type_ type_: Option(ReactionType),
+  after after: Option(id.UserId),
+  limit limit: Option(Int),
+) -> Result(List(user.User), api.CallFailure) {
+  api.execute(api, reactions_call(msg, emoji, type_:, after:, limit:))
+}
+
+/// The `Call` for [reactions], for building the request without sending it.
+pub fn reactions_call(
   msg: Message,
   emoji: ReactionEmoji,
   type_ type_: Option(ReactionType),
   after after: Option(id.UserId),
   limit limit: Option(Int),
 ) -> Call(List(user.User)) {
-  reactions_id(msg.channel_id, msg.id, emoji, type_:, after:, limit:)
+  reactions_id_call(msg.channel_id, msg.id, emoji, type_:, after:, limit:)
 }
 
 /// `reactions` for a caller who only has the ids.
 pub fn reactions_id(
+  api: api.Api,
+  channel: id.ChannelId,
+  message: id.MessageId,
+  emoji: ReactionEmoji,
+  type_ type_: Option(ReactionType),
+  after after: Option(id.UserId),
+  limit limit: Option(Int),
+) -> Result(List(user.User), api.CallFailure) {
+  api.execute(
+    api,
+    reactions_id_call(channel, message, emoji, type_:, after:, limit:),
+  )
+}
+
+/// The `Call` for [reactions_id], for building the request without sending it.
+pub fn reactions_id_call(
   channel: id.ChannelId,
   message: id.MessageId,
   emoji: ReactionEmoji,
@@ -1315,12 +1477,36 @@ pub fn reactions_id(
 }
 
 /// `DELETE .../reactions/{emoji}`, as Delete All Reactions For Emoji.
-pub fn clear_emoji_reactions(msg: Message, emoji: ReactionEmoji) -> Call(Nil) {
-  clear_emoji_reactions_id(msg.channel_id, msg.id, emoji)
+pub fn clear_emoji_reactions(
+  api: api.Api,
+  msg: Message,
+  emoji: ReactionEmoji,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, clear_emoji_reactions_call(msg, emoji))
+}
+
+/// The `Call` for [clear_emoji_reactions], for building the request without
+/// sending it.
+pub fn clear_emoji_reactions_call(
+  msg: Message,
+  emoji: ReactionEmoji,
+) -> Call(Nil) {
+  clear_emoji_reactions_id_call(msg.channel_id, msg.id, emoji)
 }
 
 /// `clear_emoji_reactions` for a caller who only has the ids.
 pub fn clear_emoji_reactions_id(
+  api: api.Api,
+  channel: id.ChannelId,
+  message: id.MessageId,
+  emoji: ReactionEmoji,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, clear_emoji_reactions_id_call(channel, message, emoji))
+}
+
+/// The `Call` for [clear_emoji_reactions_id], for building the request
+/// without sending it.
+pub fn clear_emoji_reactions_id_call(
   channel: id.ChannelId,
   message: id.MessageId,
   emoji: ReactionEmoji,
@@ -1329,13 +1515,32 @@ pub fn clear_emoji_reactions_id(
 }
 
 /// `DELETE .../reactions`, as Delete All Reactions.
-pub fn clear_reactions(msg: Message) -> Call(Nil) {
-  clear_reactions_id(msg.channel_id, msg.id)
+pub fn clear_reactions(
+  api: api.Api,
+  msg: Message,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, clear_reactions_call(msg))
+}
+
+/// The `Call` for [clear_reactions], for building the request without sending
+/// it.
+pub fn clear_reactions_call(msg: Message) -> Call(Nil) {
+  clear_reactions_id_call(msg.channel_id, msg.id)
 }
 
 /// `clear_reactions` for a caller who only has the ids. Its own bucket, having
 /// no emoji to collapse at.
 pub fn clear_reactions_id(
+  api: api.Api,
+  channel: id.ChannelId,
+  message: id.MessageId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, clear_reactions_id_call(channel, message))
+}
+
+/// The `Call` for [clear_reactions_id], for building the request without
+/// sending it.
+pub fn clear_reactions_id_call(
   channel: id.ChannelId,
   message: id.MessageId,
 ) -> Call(Nil) {
@@ -1354,6 +1559,16 @@ pub fn pinned_at(pin: PinnedMessage) -> channel.TimeCursor {
 /// message wrapped in its pin time; pages backwards through the order they
 /// were pinned in.
 pub fn pins(
+  api: api.Api,
+  channel: id.ChannelId,
+  before before: Option(channel.TimeCursor),
+  limit limit: Option(Int),
+) -> Result(PinList, api.CallFailure) {
+  api.execute(api, pins_call(channel, before:, limit:))
+}
+
+/// The `Call` for [pins], for building the request without sending it.
+pub fn pins_call(
   channel: id.ChannelId,
   before before: Option(channel.TimeCursor),
   limit limit: Option(Int),
@@ -1368,23 +1583,54 @@ pub fn pins(
 }
 
 /// `PUT /channels/{channel.id}/messages/pins/{message.id}`, as Pin Message.
-pub fn pin(msg: Message) -> Call(Nil) {
-  pin_id(msg.channel_id, msg.id)
+pub fn pin(api: api.Api, msg: Message) -> Result(Nil, api.CallFailure) {
+  api.execute(api, pin_call(msg))
+}
+
+/// The `Call` for [pin], for building the request without sending it.
+pub fn pin_call(msg: Message) -> Call(Nil) {
+  pin_id_call(msg.channel_id, msg.id)
 }
 
 /// `pin` for a caller who only has the ids.
-pub fn pin_id(channel: id.ChannelId, message: id.MessageId) -> Call(Nil) {
+pub fn pin_id(
+  api: api.Api,
+  channel: id.ChannelId,
+  message: id.MessageId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, pin_id_call(channel, message))
+}
+
+/// The `Call` for [pin_id], for building the request without sending it.
+pub fn pin_id_call(channel: id.ChannelId, message: id.MessageId) -> Call(Nil) {
   rest.put(pin_at(channel, message), body.NoBody, rest.NoContent(Nil))
 }
 
 /// `DELETE /channels/{channel.id}/messages/pins/{message.id}`, as Unpin
 /// Message.
-pub fn unpin(msg: Message) -> Call(Nil) {
-  unpin_id(msg.channel_id, msg.id)
+pub fn unpin(api: api.Api, msg: Message) -> Result(Nil, api.CallFailure) {
+  api.execute(api, unpin_call(msg))
+}
+
+/// The `Call` for [unpin], for building the request without sending it.
+pub fn unpin_call(msg: Message) -> Call(Nil) {
+  unpin_id_call(msg.channel_id, msg.id)
 }
 
 /// `unpin` for a caller who only has the ids.
-pub fn unpin_id(channel: id.ChannelId, message: id.MessageId) -> Call(Nil) {
+pub fn unpin_id(
+  api: api.Api,
+  channel: id.ChannelId,
+  message: id.MessageId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, unpin_id_call(channel, message))
+}
+
+/// The `Call` for [unpin_id], for building the request without sending it.
+pub fn unpin_id_call(
+  channel: id.ChannelId,
+  message: id.MessageId,
+) -> Call(Nil) {
   rest.delete(pin_at(channel, message), rest.NoContent(Nil))
 }
 

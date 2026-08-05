@@ -10,6 +10,7 @@ import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
+import glyde/api
 import glyde/channel
 import glyde/field.{type Field, Absent, Present}
 import glyde/id
@@ -1042,6 +1043,16 @@ fn context_list(value: Field(List(InteractionContextType))) -> Field(Json) {
 /// and `description_localized` for the full `name_localizations` and
 /// `description_localizations` maps.
 pub fn get_global_commands(
+  api: api.Api,
+  application: id.ApplicationId,
+  with_localizations with_localizations: Bool,
+) -> Result(List(ApplicationCommand), api.CallFailure) {
+  api.execute(api, get_global_commands_call(application, with_localizations:))
+}
+
+/// The `Call` for [get_global_commands], for building the request without
+/// sending it.
+pub fn get_global_commands_call(
   application: id.ApplicationId,
   with_localizations with_localizations: Bool,
 ) -> Call(List(ApplicationCommand)) {
@@ -1052,6 +1063,15 @@ pub fn get_global_commands(
 /// `POST /applications/{application.id}/commands`. Safe to run on every boot:
 /// Discord answers 200 and updates in place when the name already exists.
 pub fn create_global_command(
+  api: api.Api,
+  application: id.ApplicationId,
+  create: GlobalCommand,
+) -> Result(ApplicationCommand, api.CallFailure) {
+  api.execute(api, create_global_command_call(application, create))
+}
+
+/// The bare `Call`, for driving `glyde/rest` yourself.
+pub fn create_global_command_call(
   application: id.ApplicationId,
   create: GlobalCommand,
 ) -> Call(ApplicationCommand) {
@@ -1063,6 +1083,16 @@ pub fn create_global_command(
 }
 
 pub fn get_global_command(
+  api: api.Api,
+  application: id.ApplicationId,
+  command_id: id.CommandId,
+) -> Result(ApplicationCommand, api.CallFailure) {
+  api.execute(api, get_global_command_call(application, command_id))
+}
+
+/// The `Call` for [get_global_command], for building the request without
+/// sending it.
+pub fn get_global_command_call(
   application: id.ApplicationId,
   command_id: id.CommandId,
 ) -> Call(ApplicationCommand) {
@@ -1071,6 +1101,17 @@ pub fn get_global_command(
 
 /// `PATCH /applications/{application.id}/commands/{id}`.
 pub fn edit_global_command(
+  api: api.Api,
+  application: id.ApplicationId,
+  command_id: id.CommandId,
+  edit: EditGlobalCommand,
+) -> Result(ApplicationCommand, api.CallFailure) {
+  api.execute(api, edit_global_command_call(application, command_id, edit))
+}
+
+/// The `Call` for [edit_global_command], for building the request without
+/// sending it.
+pub fn edit_global_command_call(
   application: id.ApplicationId,
   command_id: id.CommandId,
   edit: EditGlobalCommand,
@@ -1083,6 +1124,16 @@ pub fn edit_global_command(
 }
 
 pub fn delete_global_command(
+  api: api.Api,
+  application: id.ApplicationId,
+  command_id: id.CommandId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, delete_global_command_call(application, command_id))
+}
+
+/// The `Call` for [delete_global_command], for building the request without
+/// sending it.
+pub fn delete_global_command_call(
   application: id.ApplicationId,
   command_id: id.CommandId,
 ) -> Call(Nil) {
@@ -1093,6 +1144,16 @@ pub fn delete_global_command(
 /// Every command type at once: a list holding only slash commands silently
 /// deletes the application's user and message commands.
 pub fn set_global_commands(
+  api: api.Api,
+  application: id.ApplicationId,
+  commands: List(GlobalCommand),
+) -> Result(List(ApplicationCommand), api.CallFailure) {
+  api.execute(api, set_global_commands_call(application, commands))
+}
+
+/// The `Call` for [set_global_commands], for building the request without
+/// sending it.
+pub fn set_global_commands_call(
   application: id.ApplicationId,
   commands: List(GlobalCommand),
 ) -> Call(List(ApplicationCommand)) {
@@ -1104,6 +1165,20 @@ pub fn set_global_commands(
 }
 
 pub fn get_guild_commands(
+  api: api.Api,
+  application: id.ApplicationId,
+  guild: id.GuildId,
+  with_localizations with_localizations: Bool,
+) -> Result(List(ApplicationCommand), api.CallFailure) {
+  api.execute(
+    api,
+    get_guild_commands_call(application, guild, with_localizations:),
+  )
+}
+
+/// The `Call` for [get_guild_commands], for building the request without
+/// sending it.
+pub fn get_guild_commands_call(
   application: id.ApplicationId,
   guild: id.GuildId,
   with_localizations with_localizations: Bool,
@@ -1115,6 +1190,17 @@ pub fn get_guild_commands(
 /// `POST /applications/{application.id}/guilds/{guild.id}/commands`. Appears
 /// immediately, where a global command can take an hour to propagate.
 pub fn create_guild_command(
+  api: api.Api,
+  application: id.ApplicationId,
+  guild: id.GuildId,
+  create: CreateApplicationCommand,
+) -> Result(ApplicationCommand, api.CallFailure) {
+  api.execute(api, create_guild_command_call(application, guild, create))
+}
+
+/// The `Call` for [create_guild_command], for building the request without
+/// sending it.
+pub fn create_guild_command_call(
   application: id.ApplicationId,
   guild: id.GuildId,
   create: CreateApplicationCommand,
@@ -1127,6 +1213,17 @@ pub fn create_guild_command(
 }
 
 pub fn get_guild_command(
+  api: api.Api,
+  application: id.ApplicationId,
+  guild: id.GuildId,
+  command_id: id.CommandId,
+) -> Result(ApplicationCommand, api.CallFailure) {
+  api.execute(api, get_guild_command_call(application, guild, command_id))
+}
+
+/// The `Call` for [get_guild_command], for building the request without
+/// sending it.
+pub fn get_guild_command_call(
   application: id.ApplicationId,
   guild: id.GuildId,
   command_id: id.CommandId,
@@ -1139,6 +1236,21 @@ pub fn get_guild_command(
 
 /// `PATCH /applications/{application.id}/guilds/{guild.id}/commands/{id}`.
 pub fn edit_guild_command(
+  api: api.Api,
+  application: id.ApplicationId,
+  guild: id.GuildId,
+  command_id: id.CommandId,
+  edit: EditApplicationCommand,
+) -> Result(ApplicationCommand, api.CallFailure) {
+  api.execute(
+    api,
+    edit_guild_command_call(application, guild, command_id, edit),
+  )
+}
+
+/// The `Call` for [edit_guild_command], for building the request without
+/// sending it.
+pub fn edit_guild_command_call(
   application: id.ApplicationId,
   guild: id.GuildId,
   command_id: id.CommandId,
@@ -1152,6 +1264,17 @@ pub fn edit_guild_command(
 }
 
 pub fn delete_guild_command(
+  api: api.Api,
+  application: id.ApplicationId,
+  guild: id.GuildId,
+  command_id: id.CommandId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, delete_guild_command_call(application, guild, command_id))
+}
+
+/// The `Call` for [delete_guild_command], for building the request without
+/// sending it.
+pub fn delete_guild_command_call(
   application: id.ApplicationId,
   guild: id.GuildId,
   command_id: id.CommandId,
@@ -1162,6 +1285,17 @@ pub fn delete_guild_command(
 /// `PUT /applications/{application.id}/guilds/{guild.id}/commands`, which
 /// replaces every command type this application has in that guild.
 pub fn set_guild_commands(
+  api: api.Api,
+  application: id.ApplicationId,
+  guild: id.GuildId,
+  commands: List(CreateApplicationCommand),
+) -> Result(List(ApplicationCommand), api.CallFailure) {
+  api.execute(api, set_guild_commands_call(application, guild, commands))
+}
+
+/// The `Call` for [set_guild_commands], for building the request without
+/// sending it.
+pub fn set_guild_commands_call(
   application: id.ApplicationId,
   guild: id.GuildId,
   commands: List(CreateApplicationCommand),

@@ -10,6 +10,7 @@ import gleam/dynamic/decode.{type Decoder}
 import gleam/json.{type Json}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import glyde/api
 import glyde/field.{type Field, Absent, Present}
 import glyde/flags.{type Flags}
 import glyde/id
@@ -1060,7 +1061,15 @@ fn pinned_to_json(pinned: Bool) -> Json {
 // -- Endpoints ---------------------------------------------------------------
 
 /// `GET /channels/{channel.id}`, as Get Channel.
-pub fn get(channel: id.ChannelId) -> Call(Channel) {
+pub fn get(
+  api: api.Api,
+  channel: id.ChannelId,
+) -> Result(Channel, api.CallFailure) {
+  api.execute(api, get_call(channel))
+}
+
+/// The `Call` for [get], for building the request without sending it.
+pub fn get_call(channel: id.ChannelId) -> Call(Channel) {
   rest.get([seg.lit("channels"), seg.channel(channel)], rest.Decoded(decoder()))
 }
 
@@ -1069,7 +1078,19 @@ pub fn get(channel: id.ChannelId) -> Call(Channel) {
 /// glyde cannot see inside the body, so `edits_name_or_topic` on the payload
 /// puts the call in that sublimit rather than letting it spend the channel's
 /// whole PATCH budget.
-pub fn edit(channel: id.ChannelId, edit: EditGuildChannel) -> Call(Channel) {
+pub fn edit(
+  api: api.Api,
+  channel: id.ChannelId,
+  edit: EditGuildChannel,
+) -> Result(Channel, api.CallFailure) {
+  api.execute(api, edit_call(channel, edit))
+}
+
+/// The `Call` for [edit], for building the request without sending it.
+pub fn edit_call(
+  channel: id.ChannelId,
+  edit: EditGuildChannel,
+) -> Call(Channel) {
   let call =
     rest.patch(
       [seg.lit("channels"), seg.channel(channel)],
@@ -1085,7 +1106,19 @@ pub fn edit(channel: id.ChannelId, edit: EditGuildChannel) -> Call(Channel) {
 
 /// `PATCH /channels/{channel.id}`, as Modify Channel, for a thread. Same route
 /// as `edit`, different body.
-pub fn edit_thread(thread: id.ChannelId, edit: EditThread) -> Call(Channel) {
+pub fn edit_thread(
+  api: api.Api,
+  thread: id.ChannelId,
+  edit: EditThread,
+) -> Result(Channel, api.CallFailure) {
+  api.execute(api, edit_thread_call(thread, edit))
+}
+
+/// The `Call` for [edit_thread], for building the request without sending it.
+pub fn edit_thread_call(
+  thread: id.ChannelId,
+  edit: EditThread,
+) -> Call(Channel) {
   let call =
     rest.patch(
       [seg.lit("channels"), seg.channel(thread)],
@@ -1102,7 +1135,15 @@ pub fn edit_thread(thread: id.ChannelId, edit: EditThread) -> Call(Channel) {
 
 /// `DELETE /channels/{channel.id}`, as Delete/Close Channel. Closes a DM and
 /// deletes anything else. Answers with the channel it removed, not 204.
-pub fn delete(channel: id.ChannelId) -> Call(Channel) {
+pub fn delete(
+  api: api.Api,
+  channel: id.ChannelId,
+) -> Result(Channel, api.CallFailure) {
+  api.execute(api, delete_call(channel))
+}
+
+/// The `Call` for [delete], for building the request without sending it.
+pub fn delete_call(channel: id.ChannelId) -> Call(Channel) {
   rest.delete(
     [seg.lit("channels"), seg.channel(channel)],
     rest.Decoded(decoder()),
@@ -1113,7 +1154,15 @@ pub fn delete(channel: id.ChannelId) -> Call(Channel) {
 /// returns the existing channel when there is one. Discord also blocks a bot
 /// that opens a lot of DM channels quickly from opening any more, so keep the
 /// channel id rather than reopening before every message.
-pub fn open_dm(recipient: id.UserId) -> Call(Channel) {
+pub fn open_dm(
+  api: api.Api,
+  recipient: id.UserId,
+) -> Result(Channel, api.CallFailure) {
+  api.execute(api, open_dm_call(recipient))
+}
+
+/// The `Call` for [open_dm], for building the request without sending it.
+pub fn open_dm_call(recipient: id.UserId) -> Call(Channel) {
   rest.post(
     [seg.lit("users"), seg.lit("@me"), seg.lit("channels")],
     body.json([#("recipient_id", id.to_json(recipient))]),
@@ -1123,7 +1172,15 @@ pub fn open_dm(recipient: id.UserId) -> Call(Channel) {
 
 /// `POST /channels/{channel.id}/typing`, as Trigger Typing Indicator. Lasts
 /// ten seconds or until the bot posts.
-pub fn typing(channel: id.ChannelId) -> Call(Nil) {
+pub fn typing(
+  api: api.Api,
+  channel: id.ChannelId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, typing_call(channel))
+}
+
+/// The `Call` for [typing], for building the request without sending it.
+pub fn typing_call(channel: id.ChannelId) -> Call(Nil) {
   rest.post(
     [seg.lit("channels"), seg.channel(channel), seg.lit("typing")],
     body.NoBody,
@@ -1135,6 +1192,16 @@ pub fn typing(channel: id.ChannelId) -> Call(Nil) {
 /// Permissions. The path id and the body's `type` come from the same
 /// `OverwriteBody`, so a role id cannot go out under `type: 1`.
 pub fn set_permission(
+  api: api.Api,
+  channel: id.ChannelId,
+  overwrite: OverwriteBody,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, set_permission_call(channel, overwrite))
+}
+
+/// The `Call` for [set_permission], for building the request without sending
+/// it.
+pub fn set_permission_call(
   channel: id.ChannelId,
   overwrite: OverwriteBody,
 ) -> Call(Nil) {
@@ -1148,6 +1215,16 @@ pub fn set_permission(
 /// `DELETE /channels/{channel.id}/permissions/{overwrite.id}`, as Delete
 /// Channel Permission.
 pub fn clear_permission(
+  api: api.Api,
+  channel: id.ChannelId,
+  overwrite: id.OverwriteId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, clear_permission_call(channel, overwrite))
+}
+
+/// The `Call` for [clear_permission], for building the request without
+/// sending it.
+pub fn clear_permission_call(
   channel: id.ChannelId,
   overwrite: id.OverwriteId,
 ) -> Call(Nil) {
@@ -1157,6 +1234,17 @@ pub fn clear_permission(
 /// `POST /channels/{channel.id}/messages/{message.id}/threads`, as Start
 /// Thread From Message.
 pub fn start_thread_from_message(
+  api: api.Api,
+  channel: id.ChannelId,
+  message: id.MessageId,
+  thread: CreateThreadFromMessage,
+) -> Result(Channel, api.CallFailure) {
+  api.execute(api, start_thread_from_message_call(channel, message, thread))
+}
+
+/// The `Call` for [start_thread_from_message], for building the request
+/// without sending it.
+pub fn start_thread_from_message_call(
   channel: id.ChannelId,
   message: id.MessageId,
   thread: CreateThreadFromMessage,
@@ -1177,6 +1265,15 @@ pub fn start_thread_from_message(
 /// `POST /channels/{channel.id}/threads`, as Start Thread Without Message.
 /// The same path creates a forum or media post, with a different body.
 pub fn start_thread(
+  api: api.Api,
+  channel: id.ChannelId,
+  thread: CreateThread,
+) -> Result(Channel, api.CallFailure) {
+  api.execute(api, start_thread_call(channel, thread))
+}
+
+/// The `Call` for [start_thread], for building the request without sending it.
+pub fn start_thread_call(
   channel: id.ChannelId,
   thread: CreateThread,
 ) -> Call(Channel) {
@@ -1188,7 +1285,15 @@ pub fn start_thread(
 }
 
 /// `PUT /channels/{thread.id}/thread-members/@me`, as Join Thread.
-pub fn join_thread(thread: id.ChannelId) -> Call(Nil) {
+pub fn join_thread(
+  api: api.Api,
+  thread: id.ChannelId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, join_thread_call(thread))
+}
+
+/// The `Call` for [join_thread], for building the request without sending it.
+pub fn join_thread_call(thread: id.ChannelId) -> Call(Nil) {
   rest.put(
     thread_member_at(thread, seg.lit("@me")),
     body.NoBody,
@@ -1197,12 +1302,33 @@ pub fn join_thread(thread: id.ChannelId) -> Call(Nil) {
 }
 
 /// `DELETE /channels/{thread.id}/thread-members/@me`, as Leave Thread.
-pub fn leave_thread(thread: id.ChannelId) -> Call(Nil) {
+pub fn leave_thread(
+  api: api.Api,
+  thread: id.ChannelId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, leave_thread_call(thread))
+}
+
+/// The `Call` for [leave_thread], for building the request without sending it.
+pub fn leave_thread_call(thread: id.ChannelId) -> Call(Nil) {
   rest.delete(thread_member_at(thread, seg.lit("@me")), rest.NoContent(Nil))
 }
 
 /// `PUT /channels/{thread.id}/thread-members/{user.id}`, as Add Thread Member.
-pub fn add_thread_member(thread: id.ChannelId, user: id.UserId) -> Call(Nil) {
+pub fn add_thread_member(
+  api: api.Api,
+  thread: id.ChannelId,
+  user: id.UserId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, add_thread_member_call(thread, user))
+}
+
+/// The `Call` for [add_thread_member], for building the request without
+/// sending it.
+pub fn add_thread_member_call(
+  thread: id.ChannelId,
+  user: id.UserId,
+) -> Call(Nil) {
   rest.put(
     thread_member_at(thread, seg.id(user)),
     body.NoBody,
@@ -1213,6 +1339,16 @@ pub fn add_thread_member(thread: id.ChannelId, user: id.UserId) -> Call(Nil) {
 /// `DELETE /channels/{thread.id}/thread-members/{user.id}`, as Remove Thread
 /// Member.
 pub fn remove_thread_member(
+  api: api.Api,
+  thread: id.ChannelId,
+  user: id.UserId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, remove_thread_member_call(thread, user))
+}
+
+/// The `Call` for [remove_thread_member], for building the request without
+/// sending it.
+pub fn remove_thread_member_call(
   thread: id.ChannelId,
   user: id.UserId,
 ) -> Call(Nil) {
@@ -1222,6 +1358,17 @@ pub fn remove_thread_member(
 /// `GET /channels/{channel.id}/threads/archived/public`, as List Public
 /// Archived Threads. Newest archive first.
 pub fn public_archived_threads(
+  api: api.Api,
+  channel: id.ChannelId,
+  before before: Option(TimeCursor),
+  limit limit: Option(Int),
+) -> Result(ThreadList, api.CallFailure) {
+  api.execute(api, public_archived_threads_call(channel, before:, limit:))
+}
+
+/// The `Call` for [public_archived_threads], for building the request without
+/// sending it.
+pub fn public_archived_threads_call(
   channel: id.ChannelId,
   before before: Option(TimeCursor),
   limit limit: Option(Int),
@@ -1232,6 +1379,17 @@ pub fn public_archived_threads(
 /// `GET /channels/{channel.id}/threads/archived/private`, as List Private
 /// Archived Threads. Needs MANAGE_THREADS.
 pub fn private_archived_threads(
+  api: api.Api,
+  channel: id.ChannelId,
+  before before: Option(TimeCursor),
+  limit limit: Option(Int),
+) -> Result(ThreadList, api.CallFailure) {
+  api.execute(api, private_archived_threads_call(channel, before:, limit:))
+}
+
+/// The `Call` for [private_archived_threads], for building the request
+/// without sending it.
+pub fn private_archived_threads_call(
   channel: id.ChannelId,
   before before: Option(TimeCursor),
   limit limit: Option(Int),

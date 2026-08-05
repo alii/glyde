@@ -12,6 +12,7 @@ import gleam/dynamic/decode.{type Decoder}
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import glyde/api
 import glyde/channel
 import glyde/emoji
 import glyde/flags.{type Flags}
@@ -627,14 +628,34 @@ pub fn create_ban_body(payload: CreateBan) -> body.Body {
 
 /// `GET /guilds/{guild.id}`, as Get Guild. `with_counts` adds
 /// `approximate_member_count` and `approximate_presence_count`.
-pub fn get(guild: id.GuildId, with_counts with_counts: Bool) -> Call(Guild) {
+pub fn get(
+  api: api.Api,
+  guild: id.GuildId,
+  with_counts with_counts: Bool,
+) -> Result(Guild, api.CallFailure) {
+  api.execute(api, get_call(guild, with_counts:))
+}
+
+/// The `Call` for [get], for building the request without sending it.
+pub fn get_call(
+  guild: id.GuildId,
+  with_counts with_counts: Bool,
+) -> Call(Guild) {
   rest.get([seg.lit("guilds"), seg.guild(guild)], rest.Decoded(decoder()))
   |> rest.query(query.one("with_counts", with_counts, query.flag))
 }
 
 /// `GET /guilds/{guild.id}/channels`, as Get Guild Channels. Threads not
 /// included.
-pub fn channels(guild: id.GuildId) -> Call(List(channel.Channel)) {
+pub fn channels(
+  api: api.Api,
+  guild: id.GuildId,
+) -> Result(List(channel.Channel), api.CallFailure) {
+  api.execute(api, channels_call(guild))
+}
+
+/// The `Call` for [channels], for building the request without sending it.
+pub fn channels_call(guild: id.GuildId) -> Call(List(channel.Channel)) {
   rest.get(
     [seg.lit("guilds"), seg.guild(guild), seg.lit("channels")],
     rest.Decoded(decode.list(channel.decoder())),
@@ -643,6 +664,16 @@ pub fn channels(guild: id.GuildId) -> Call(List(channel.Channel)) {
 
 /// `POST /guilds/{guild.id}/channels`, as Create Guild Channel.
 pub fn create_channel(
+  api: api.Api,
+  guild: id.GuildId,
+  create: channel.CreateChannel,
+) -> Result(channel.Channel, api.CallFailure) {
+  api.execute(api, create_channel_call(guild, create))
+}
+
+/// The `Call` for [create_channel], for building the request without sending
+/// it.
+pub fn create_channel_call(
   guild: id.GuildId,
   create: channel.CreateChannel,
 ) -> Call(channel.Channel) {
@@ -655,7 +686,16 @@ pub fn create_channel(
 
 /// `GET /guilds/{guild.id}/threads/active`, as List Active Guild Threads.
 /// Unpaged, so the answer is an `ActiveThreads` and not a `ThreadList`.
-pub fn active_threads(guild: id.GuildId) -> Call(channel.ActiveThreads) {
+pub fn active_threads(
+  api: api.Api,
+  guild: id.GuildId,
+) -> Result(channel.ActiveThreads, api.CallFailure) {
+  api.execute(api, active_threads_call(guild))
+}
+
+/// The `Call` for [active_threads], for building the request without sending
+/// it.
+pub fn active_threads_call(guild: id.GuildId) -> Call(channel.ActiveThreads) {
   rest.get(
     [seg.lit("guilds"), seg.guild(guild), seg.lit("threads"), seg.lit("active")],
     rest.Decoded(channel.active_threads_decoder()),
@@ -665,6 +705,16 @@ pub fn active_threads(guild: id.GuildId) -> Call(channel.ActiveThreads) {
 /// `GET /guilds/{guild.id}/bans`, as Get Guild Bans. Discord caps `limit`
 /// at 1000. Pages by user id.
 pub fn bans(
+  api: api.Api,
+  guild: id.GuildId,
+  cursor cursor: Option(query.Page(id.User)),
+  limit limit: Option(Int),
+) -> Result(List(Ban), api.CallFailure) {
+  api.execute(api, bans_call(guild, cursor:, limit:))
+}
+
+/// The `Call` for [bans], for building the request without sending it.
+pub fn bans_call(
   guild: id.GuildId,
   cursor cursor: Option(query.Page(id.User)),
   limit limit: Option(Int),
@@ -677,17 +727,49 @@ pub fn bans(
 
 /// `GET /guilds/{guild.id}/bans/{user.id}`, as Get Guild Ban. Answers 404 when
 /// the user is not banned.
-pub fn ban_for(guild: id.GuildId, user: id.UserId) -> Call(Ban) {
+pub fn ban_for(
+  api: api.Api,
+  guild: id.GuildId,
+  user: id.UserId,
+) -> Result(Ban, api.CallFailure) {
+  api.execute(api, ban_for_call(guild, user))
+}
+
+/// The `Call` for [ban_for], for building the request without sending it.
+pub fn ban_for_call(guild: id.GuildId, user: id.UserId) -> Call(Ban) {
   rest.get(ban_at(guild, user), rest.Decoded(ban_decoder()))
 }
 
 /// `PUT /guilds/{guild.id}/bans/{user.id}`, as Create Guild Ban.
-pub fn ban(guild: id.GuildId, user: id.UserId, ban: CreateBan) -> Call(Nil) {
+pub fn ban(
+  api: api.Api,
+  guild: id.GuildId,
+  user: id.UserId,
+  ban: CreateBan,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, ban_call(guild, user, ban))
+}
+
+/// The `Call` for [ban], for building the request without sending it.
+pub fn ban_call(
+  guild: id.GuildId,
+  user: id.UserId,
+  ban: CreateBan,
+) -> Call(Nil) {
   rest.put(ban_at(guild, user), create_ban_body(ban), rest.NoContent(Nil))
 }
 
 /// `DELETE /guilds/{guild.id}/bans/{user.id}`, as Remove Guild Ban.
-pub fn unban(guild: id.GuildId, user: id.UserId) -> Call(Nil) {
+pub fn unban(
+  api: api.Api,
+  guild: id.GuildId,
+  user: id.UserId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, unban_call(guild, user))
+}
+
+/// The `Call` for [unban], for building the request without sending it.
+pub fn unban_call(guild: id.GuildId, user: id.UserId) -> Call(Nil) {
   rest.delete(ban_at(guild, user), rest.NoContent(Nil))
 }
 
@@ -695,6 +777,16 @@ pub fn unban(guild: id.GuildId, user: id.UserId) -> Call(Nil) {
 /// privileged GUILD_MEMBERS intent Discord answers 403, not a short list.
 /// Discord caps `limit` at 1000 and defaults it to 1.
 pub fn members(
+  api: api.Api,
+  guild: id.GuildId,
+  after after: Option(id.UserId),
+  limit limit: Option(Int),
+) -> Result(List(member.GuildMember), api.CallFailure) {
+  api.execute(api, members_call(guild, after:, limit:))
+}
+
+/// The `Call` for [members], for building the request without sending it.
+pub fn members_call(
   guild: id.GuildId,
   after after: Option(id.UserId),
   limit limit: Option(Int),
@@ -709,13 +801,36 @@ pub fn members(
 }
 
 /// `GET /guilds/{guild.id}/members/{user.id}`, as Get Guild Member.
-pub fn member(guild: id.GuildId, user: id.UserId) -> Call(member.GuildMember) {
+pub fn member(
+  api: api.Api,
+  guild: id.GuildId,
+  user: id.UserId,
+) -> Result(member.GuildMember, api.CallFailure) {
+  api.execute(api, member_call(guild, user))
+}
+
+/// The `Call` for [member], for building the request without sending it.
+pub fn member_call(
+  guild: id.GuildId,
+  user: id.UserId,
+) -> Call(member.GuildMember) {
   rest.get(member_at(guild, user), rest.Decoded(member.decoder()))
 }
 
 /// `GET /guilds/{guild.id}/members/search`, as Search Guild Members. A prefix
 /// match on username or nickname. Discord caps `limit` at 1000, defaults to 1.
 pub fn search_members(
+  api: api.Api,
+  guild: id.GuildId,
+  query search: String,
+  limit limit: Option(Int),
+) -> Result(List(member.GuildMember), api.CallFailure) {
+  api.execute(api, search_members_call(guild, query: search, limit:))
+}
+
+/// The `Call` for [search_members], for building the request without sending
+/// it.
+pub fn search_members_call(
   guild: id.GuildId,
   query search: String,
   limit limit: Option(Int),
@@ -734,6 +849,16 @@ pub fn search_members(
 
 /// `PATCH /guilds/{guild.id}/members/{user.id}`, as Modify Guild Member.
 pub fn edit_member(
+  api: api.Api,
+  guild: id.GuildId,
+  user: id.UserId,
+  edit: member.EditGuildMember,
+) -> Result(member.GuildMember, api.CallFailure) {
+  api.execute(api, edit_member_call(guild, user, edit))
+}
+
+/// The `Call` for [edit_member], for building the request without sending it.
+pub fn edit_member_call(
   guild: id.GuildId,
   user: id.UserId,
   edit: member.EditGuildMember,
@@ -747,6 +872,15 @@ pub fn edit_member(
 
 /// `PATCH /guilds/{guild.id}/members/@me`, as Modify Current Member.
 pub fn edit_me(
+  api: api.Api,
+  guild: id.GuildId,
+  edit: member.EditCurrentMember,
+) -> Result(member.GuildMember, api.CallFailure) {
+  api.execute(api, edit_me_call(guild, edit))
+}
+
+/// The `Call` for [edit_me], for building the request without sending it.
+pub fn edit_me_call(
   guild: id.GuildId,
   edit: member.EditCurrentMember,
 ) -> Call(member.GuildMember) {
@@ -758,13 +892,32 @@ pub fn edit_me(
 }
 
 /// `DELETE /guilds/{guild.id}/members/{user.id}`, as Remove Guild Member.
-pub fn kick(guild: id.GuildId, user: id.UserId) -> Call(Nil) {
+pub fn kick(
+  api: api.Api,
+  guild: id.GuildId,
+  user: id.UserId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, kick_call(guild, user))
+}
+
+/// The `Call` for [kick], for building the request without sending it.
+pub fn kick_call(guild: id.GuildId, user: id.UserId) -> Call(Nil) {
   rest.delete(member_at(guild, user), rest.NoContent(Nil))
 }
 
 /// `PUT /guilds/{guild.id}/members/{user.id}/roles/{role.id}`, as Add Guild
 /// Member Role.
 pub fn add_role(
+  api: api.Api,
+  guild: id.GuildId,
+  user: id.UserId,
+  role: id.RoleId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, add_role_call(guild, user, role))
+}
+
+/// The `Call` for [add_role], for building the request without sending it.
+pub fn add_role_call(
   guild: id.GuildId,
   user: id.UserId,
   role: id.RoleId,
@@ -775,6 +928,16 @@ pub fn add_role(
 /// `DELETE /guilds/{guild.id}/members/{user.id}/roles/{role.id}`, as Remove
 /// Guild Member Role.
 pub fn remove_role(
+  api: api.Api,
+  guild: id.GuildId,
+  user: id.UserId,
+  role: id.RoleId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, remove_role_call(guild, user, role))
+}
+
+/// The `Call` for [remove_role], for building the request without sending it.
+pub fn remove_role_call(
   guild: id.GuildId,
   user: id.UserId,
   role: id.RoleId,
@@ -783,17 +946,43 @@ pub fn remove_role(
 }
 
 /// `GET /guilds/{guild.id}/roles`, as Get Guild Roles.
-pub fn roles(guild: id.GuildId) -> Call(List(role.Role)) {
+pub fn roles(
+  api: api.Api,
+  guild: id.GuildId,
+) -> Result(List(role.Role), api.CallFailure) {
+  api.execute(api, roles_call(guild))
+}
+
+/// The `Call` for [roles], for building the request without sending it.
+pub fn roles_call(guild: id.GuildId) -> Call(List(role.Role)) {
   rest.get(roles_at(guild), rest.Decoded(decode.list(role.decoder())))
 }
 
 /// `GET /guilds/{guild.id}/roles/{role.id}`, as Get Guild Role.
-pub fn role(guild: id.GuildId, role_id: id.RoleId) -> Call(role.Role) {
+pub fn role(
+  api: api.Api,
+  guild: id.GuildId,
+  role_id: id.RoleId,
+) -> Result(role.Role, api.CallFailure) {
+  api.execute(api, role_call(guild, role_id))
+}
+
+/// The `Call` for [role], for building the request without sending it.
+pub fn role_call(guild: id.GuildId, role_id: id.RoleId) -> Call(role.Role) {
   rest.get(role_at(guild, role_id), rest.Decoded(role.decoder()))
 }
 
 /// `POST /guilds/{guild.id}/roles`, as Create Guild Role.
 pub fn create_role(
+  api: api.Api,
+  guild: id.GuildId,
+  create: role.CreateRole,
+) -> Result(role.Role, api.CallFailure) {
+  api.execute(api, create_role_call(guild, create))
+}
+
+/// The `Call` for [create_role], for building the request without sending it.
+pub fn create_role_call(
   guild: id.GuildId,
   create: role.CreateRole,
 ) -> Call(role.Role) {
@@ -806,6 +995,16 @@ pub fn create_role(
 
 /// `PATCH /guilds/{guild.id}/roles/{role.id}`, as Modify Guild Role.
 pub fn edit_role(
+  api: api.Api,
+  guild: id.GuildId,
+  role_id: id.RoleId,
+  edit: role.EditRole,
+) -> Result(role.Role, api.CallFailure) {
+  api.execute(api, edit_role_call(guild, role_id, edit))
+}
+
+/// The `Call` for [edit_role], for building the request without sending it.
+pub fn edit_role_call(
   guild: id.GuildId,
   role_id: id.RoleId,
   edit: role.EditRole,
@@ -818,7 +1017,16 @@ pub fn edit_role(
 }
 
 /// `DELETE /guilds/{guild.id}/roles/{role.id}`, as Delete Guild Role.
-pub fn delete_role(guild: id.GuildId, role_id: id.RoleId) -> Call(Nil) {
+pub fn delete_role(
+  api: api.Api,
+  guild: id.GuildId,
+  role_id: id.RoleId,
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, delete_role_call(guild, role_id))
+}
+
+/// The `Call` for [delete_role], for building the request without sending it.
+pub fn delete_role_call(guild: id.GuildId, role_id: id.RoleId) -> Call(Nil) {
   rest.delete(role_at(guild, role_id), rest.NoContent(Nil))
 }
 
@@ -827,6 +1035,16 @@ pub fn delete_role(guild: id.GuildId, role_id: id.RoleId) -> Call(Nil) {
 /// Discord caps `limit` at 200 and defaults it to 200. A `/users` route, so no
 /// guild major parameter. Pages by guild id.
 pub fn mine(
+  api: api.Api,
+  cursor cursor: Option(query.Page(id.Guild)),
+  limit limit: Option(Int),
+  with_counts with_counts: Bool,
+) -> Result(List(UserGuild), api.CallFailure) {
+  api.execute(api, mine_call(cursor:, limit:, with_counts:))
+}
+
+/// The `Call` for [mine], for building the request without sending it.
+pub fn mine_call(
   cursor cursor: Option(query.Page(id.Guild)),
   limit limit: Option(Int),
   with_counts with_counts: Bool,
@@ -847,7 +1065,15 @@ pub fn mine(
 /// `GET /users/@me/guilds/{guild.id}/member`, as Get Current User Guild
 /// Member. A `/users` route, so the guild is a plain segment and every guild
 /// shares one bucket.
-pub fn my_member(guild: id.GuildId) -> Call(member.GuildMember) {
+pub fn my_member(
+  api: api.Api,
+  guild: id.GuildId,
+) -> Result(member.GuildMember, api.CallFailure) {
+  api.execute(api, my_member_call(guild))
+}
+
+/// The `Call` for [my_member], for building the request without sending it.
+pub fn my_member_call(guild: id.GuildId) -> Call(member.GuildMember) {
   rest.get(
     list.append(user_guild_at(guild), [seg.lit("member")]),
     rest.Decoded(member.decoder()),
@@ -856,7 +1082,12 @@ pub fn my_member(guild: id.GuildId) -> Call(member.GuildMember) {
 
 /// `DELETE /users/@me/guilds/{guild.id}`, as Leave Guild. Answers 204 whether
 /// or not the bot was in it.
-pub fn leave(guild: id.GuildId) -> Call(Nil) {
+pub fn leave(api: api.Api, guild: id.GuildId) -> Result(Nil, api.CallFailure) {
+  api.execute(api, leave_call(guild))
+}
+
+/// The `Call` for [leave], for building the request without sending it.
+pub fn leave_call(guild: id.GuildId) -> Call(Nil) {
   rest.delete(user_guild_at(guild), rest.NoContent(Nil))
 }
 

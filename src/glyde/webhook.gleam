@@ -17,6 +17,7 @@
 
 import gleam/list
 import gleam/option.{type Option}
+import glyde/api
 import glyde/id
 import glyde/message.{type Message}
 import glyde/rest.{type Call}
@@ -48,6 +49,16 @@ pub fn application_credential(
 /// `POST /webhooks/{webhook.id}/{webhook.token}`. Answers 204 with no body:
 /// use `execute_and_wait` to get the message back.
 pub fn execute(
+  api: api.Api,
+  credential: Credential,
+  body: Body,
+  thread thread: Option(id.ChannelId),
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, execute_call(credential, body, thread:))
+}
+
+/// The `Call` for [execute], for building the request without sending it.
+pub fn execute_call(
   credential: Credential,
   body: Body,
   thread thread: Option(id.ChannelId),
@@ -59,6 +70,17 @@ pub fn execute(
 /// `POST /webhooks/{webhook.id}/{webhook.token}?wait=true`, which answers 200
 /// with the message instead of 204 with nothing.
 pub fn execute_and_wait(
+  api: api.Api,
+  credential: Credential,
+  body: Body,
+  thread thread: Option(id.ChannelId),
+) -> Result(Message, api.CallFailure) {
+  api.execute(api, execute_and_wait_call(credential, body, thread:))
+}
+
+/// The `Call` for [execute_and_wait], for building the request without
+/// sending it.
+pub fn execute_and_wait_call(
   credential: Credential,
   body: Body,
   thread thread: Option(id.ChannelId),
@@ -70,6 +92,16 @@ pub fn execute_and_wait(
 }
 
 pub fn get_original_message(
+  api: api.Api,
+  credential: Credential,
+  thread thread: Option(id.ChannelId),
+) -> Result(Message, api.CallFailure) {
+  api.execute(api, get_original_message_call(credential, thread:))
+}
+
+/// The `Call` for [get_original_message], for building the request without
+/// sending it.
+pub fn get_original_message_call(
   credential: Credential,
   thread thread: Option(id.ChannelId),
 ) -> Call(Message) {
@@ -80,6 +112,17 @@ pub fn get_original_message(
 /// `PATCH /webhooks/{webhook.id}/{webhook.token}/messages/@original`. An
 /// `attachments` array is the complete list of files to keep.
 pub fn edit_original_message(
+  api: api.Api,
+  credential: Credential,
+  body: Body,
+  thread thread: Option(id.ChannelId),
+) -> Result(Message, api.CallFailure) {
+  api.execute(api, edit_original_message_call(credential, body, thread:))
+}
+
+/// The `Call` for [edit_original_message], for building the request without
+/// sending it.
+pub fn edit_original_message_call(
   credential: Credential,
   body: Body,
   thread thread: Option(id.ChannelId),
@@ -89,6 +132,16 @@ pub fn edit_original_message(
 }
 
 pub fn delete_original_message(
+  api: api.Api,
+  credential: Credential,
+  thread thread: Option(id.ChannelId),
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, delete_original_message_call(credential, thread:))
+}
+
+/// The `Call` for [delete_original_message], for building the request without
+/// sending it.
+pub fn delete_original_message_call(
   credential: Credential,
   thread thread: Option(id.ChannelId),
 ) -> Call(Nil) {
@@ -97,6 +150,16 @@ pub fn delete_original_message(
 }
 
 pub fn get_message(
+  api: api.Api,
+  credential: Credential,
+  message: id.MessageId,
+  thread thread: Option(id.ChannelId),
+) -> Result(Message, api.CallFailure) {
+  api.execute(api, get_message_call(credential, message, thread:))
+}
+
+/// The `Call` for [get_message], for building the request without sending it.
+pub fn get_message_call(
   credential: Credential,
   message: id.MessageId,
   thread thread: Option(id.ChannelId),
@@ -106,6 +169,17 @@ pub fn get_message(
 }
 
 pub fn edit_message(
+  api: api.Api,
+  credential: Credential,
+  message: id.MessageId,
+  body: Body,
+  thread thread: Option(id.ChannelId),
+) -> Result(Message, api.CallFailure) {
+  api.execute(api, edit_message_call(credential, message, body, thread:))
+}
+
+/// The `Call` for [edit_message], for building the request without sending it.
+pub fn edit_message_call(
   credential: Credential,
   message: id.MessageId,
   body: Body,
@@ -120,6 +194,17 @@ pub fn edit_message(
 }
 
 pub fn delete_message(
+  api: api.Api,
+  credential: Credential,
+  message: id.MessageId,
+  thread thread: Option(id.ChannelId),
+) -> Result(Nil, api.CallFailure) {
+  api.execute(api, delete_message_call(credential, message, thread:))
+}
+
+/// The `Call` for [delete_message], for building the request without sending
+/// it.
+pub fn delete_message_call(
   credential: Credential,
   message: id.MessageId,
   thread thread: Option(id.ChannelId),

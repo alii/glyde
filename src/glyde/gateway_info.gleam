@@ -6,6 +6,7 @@
 
 import gleam/dynamic/decode.{type Decoder}
 import gleam/int
+import glyde/api
 import glyde/identify_queue.{type Queue} as queue
 import glyde/internal/host
 import glyde/rest.{type Call}
@@ -140,7 +141,12 @@ pub fn start_window(bot: GatewayBot, now_ms now_ms: Int) -> StartWindow {
 /// `GET /gateway`, as Get Gateway. The WebSocket URL and nothing else. The
 /// one route here that needs no token, and sending the bot's anyway is
 /// harmless, so this goes through the same `rest.Config` as everything else.
-pub fn get() -> Call(GatewayInfo) {
+pub fn get(api: api.Api) -> Result(GatewayInfo, api.CallFailure) {
+  api.execute(api, get_call())
+}
+
+/// The `Call` for [get], for building the request without sending it.
+pub fn get_call() -> Call(GatewayInfo) {
   rest.get([seg.lit("gateway")], rest.Decoded(decoder()))
 }
 
@@ -149,6 +155,11 @@ pub fn get() -> Call(GatewayInfo) {
 /// guessed shard count closes the socket 4010 or 4011, neither of which a
 /// reconnect fixes. Identifying past `max_concurrency` costs an
 /// INVALID_SESSION instead, which is why the answer feeds `identify_queue`.
-pub fn get_bot() -> Call(GatewayBot) {
+pub fn get_bot(api: api.Api) -> Result(GatewayBot, api.CallFailure) {
+  api.execute(api, get_bot_call())
+}
+
+/// The `Call` for [get_bot], for building the request without sending it.
+pub fn get_bot_call() -> Call(GatewayBot) {
   rest.get([seg.lit("gateway"), seg.lit("bot")], rest.Decoded(bot_decoder()))
 }

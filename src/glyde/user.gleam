@@ -10,6 +10,7 @@
 import gleam/dynamic/decode.{type Decoder}
 import gleam/json.{type Json}
 import gleam/option.{type Option, None, Some}
+import glyde/api
 import glyde/flags.{type Flags}
 import glyde/id
 import glyde/rest.{type Call}
@@ -222,7 +223,12 @@ pub fn current_user_decoder() -> Decoder(CurrentUser) {
 
 /// `GET /users/@me`, as Get Current User. The bot's own user, which carries
 /// `verified` and `email` that a plain `User` does not have.
-pub fn me() -> Call(CurrentUser) {
+pub fn me(api: api.Api) -> Result(CurrentUser, api.CallFailure) {
+  api.execute(api, me_call())
+}
+
+/// The `Call` for [me], for building the request without sending it.
+pub fn me_call() -> Call(CurrentUser) {
   rest.get(
     [seg.lit("users"), seg.lit("@me")],
     rest.Decoded(current_user_decoder()),
@@ -230,6 +236,11 @@ pub fn me() -> Call(CurrentUser) {
 }
 
 /// `GET /users/{user.id}`, as Get User.
-pub fn get(user: id.UserId) -> Call(User) {
+pub fn get(api: api.Api, user: id.UserId) -> Result(User, api.CallFailure) {
+  api.execute(api, get_call(user))
+}
+
+/// The `Call` for [get], for building the request without sending it.
+pub fn get_call(user: id.UserId) -> Call(User) {
   rest.get([seg.lit("users"), seg.id(user)], rest.Decoded(decoder()))
 }

@@ -27,11 +27,11 @@ When the reply takes longer to build, `interaction.defer` first to show the
 `interaction.edit_response`:
 
 ```gleam
-use _ <- glyde.do(interaction.defer(it))
+let _ = api.execute(api, interaction.defer(it))
 let answer = something_slow()
-use _ <- glyde.do(interaction.edit_response(
-  it,
-  message.Edit(..message.new_edit(mentions.none()), content: Present(answer)),
-))
-glyde.continue(state)
+let _ =
+  api.execute(api, interaction.edit_response(it, message.Edit(
+    ..message.new_edit(mentions.none()),
+    content: Present(answer),
+  )))
 ```

@@ -8,13 +8,13 @@ Glyde is currently pre-1.0.0 release, so please try it out but be wary of paperc
 gleam add glyde
 ```
 
-Here's an example bot that answers `!ping` and counts how many it has sent:
+Here's an example bot that answers `!ping`:
 
 ```gleam
-//// A Discord bot that answers "!ping" with "pong!", counting as it goes.
+//// A Discord bot that answers "!ping" with "pong!".
 
 import envoy
-import gleam/int
+import gleam/bool
 import gleam/io
 import glyde
 import glyde/intents
@@ -25,22 +25,19 @@ pub fn main() -> Nil {
 
   glyde.new(
     token:,
-    state: 0,
     intents: intents.new([
       intents.Guilds,
       intents.GuildMessages,
       intents.MessageContent,
     ]),
   )
-  |> glyde.on_ready(fn(pongs, ready) {
+  |> glyde.on_ready(fn(_api, ready) {
     io.println("logged in as " <> ready.me.user.username)
-    glyde.continue(pongs)
   })
-  |> glyde.on_message(fn(pongs, msg) {
-    use <- glyde.when(msg.content == "!ping", or: pongs)
-    let pong = message.text("pong! #" <> int.to_string(pongs + 1))
-    use _ <- glyde.do(message.reply(msg, pong))
-    glyde.continue(pongs + 1)
+  |> glyde.on_message(fn(api, msg) {
+    use <- bool.guard(msg.content != "!ping", Nil)
+    let _ = message.reply(api, msg, message.text("pong!"))
+    Nil
   })
   |> glyde.run
 }
@@ -48,24 +45,26 @@ pub fn main() -> Nil {
 
 That is `examples/ping_pong`, whole file.
 
-A handler is given the bot's state and returns the next one. Handlers run in the order they were added, each seeing what the one before returned, so two of them on the same event share one value.
+Each event is handed to a fresh process under a supervisor, so a slow or
+crashing handler never holds up the next one. An endpoint call blocks that one
+process on the rate limiter and the network; the shard keeps reading.
 
 ## The runtime
 
-`run` holds a `glyde/client` bot and loops: find the timer due soonest, wait
-that long on the socket, feed the core whatever came back. The socket read
-timeout is the timer, so there is no `send_after`, no timer wheel and no
-process.
+`run` starts a small OTP tree: a rate-limiter actor, a factory supervisor for
+handler processes, and a shard actor holding the socket. The shard actor loops
+one turn at a time: find the timer due soonest, wait that long on the socket,
+feed the core whatever came back, spawn a handler process for each dispatch.
 
 `glyde/transport` is the platform half, four functions wide: open a socket, send
 an HTTP request, read the clock, wait. `glyde.with_transport` swaps it, so the
 same bot runs over a proxy, a recording double, or a script with no network at
 all. `test/glyde_test.gleam` drives a whole session that way.
 
-Below `run` is `glyde/client`. Give it six functions, open, send, close, drop,
-arm a timer and cancel one, and it runs the state machine's outputs against
-them. That is where sharding, compression and a fleet's shared identify queue
-live.
+Below the shard actor is `glyde/client`. Give it six functions, open, send,
+close, drop, arm a timer and cancel one, and it runs the state machine's outputs
+against them. That is where sharding, compression and a fleet's shared identify
+queue live.
 
 ## The core does no IO
 
