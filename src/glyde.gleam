@@ -97,11 +97,29 @@ pub opaque type Bot {
     listeners: List(fn(Api, Event) -> Nil),
     status: fn(Status) -> Nil,
     transport: Transport,
+    names: Names,
+  )
+}
+
+/// The names glyde's own processes register under. They belong to the bot
+/// value rather than to a start, so every start of the same bot — including
+/// a supervisor restarting it — lands on the same three.
+type Names {
+  Names(
+    limiter: process.Name(limiter_actor.Message),
+    handlers: process.Name(factory.Message(runtime.Job, Nil)),
+    shard: process.Name(runtime.Message),
   )
 }
 
 /// One shard, no compression, a real socket, and a line on stderr when
 /// something goes wrong.
+///
+/// Build a bot once, at startup, and keep the value. This mints the three
+/// process names its tree registers under, and `process.new_name` creates an
+/// atom that is never collected — so a `new` per start would fill the atom
+/// table and take the VM down with it. Holding the names on the bot is what
+/// makes `supervised` safe to restart forever.
 pub fn new(token secret: String, intents intents: Intents) -> Bot {
   Bot(
     gateway: gateway.config(token: token.new(secret), intents:),
@@ -109,6 +127,11 @@ pub fn new(token secret: String, intents intents: Intents) -> Bot {
     listeners: [],
     status: status.printing,
     transport: erlang_transport.default(),
+    names: Names(
+      limiter: process.new_name("glyde_limiter"),
+      handlers: process.new_name("glyde_handlers"),
+      shard: process.new_name("glyde_shard"),
+    ),
   )
 }
 
@@ -176,16 +199,36 @@ pub fn with_transport(bot: Bot, transport: Transport) -> Bot {
   Bot(..bot, transport:)
 }
 
-/// Build the supervision tree and start it. Returns the top supervisor's pid,
-/// so the caller can put it under one of their own or monitor it.
-pub fn start(bot: Bot) -> Result(Pid, actor.StartError) {
-  let limiter_name = process.new_name("glyde_limiter")
-  let handlers_name = process.new_name("glyde_handlers")
-  let shard_name = process.new_name("glyde_shard")
+/// A child specification, for putting glyde under a supervision tree of your
+/// own. Restarting is safe: the names live on the bot, so the tree comes back
+/// on the same ones.
+///
+/// ```gleam
+/// supervisor.new(supervisor.OneForOne)
+/// |> supervisor.add(glyde.supervised(bot))
+/// |> supervisor.start
+/// ```
+pub fn supervised(
+  bot: Bot,
+) -> supervision.ChildSpecification(supervisor.Supervisor) {
+  supervision.supervisor(fn() { supervisor.start(tree(bot)) })
+}
 
+/// Build the supervision tree and start it. Returns the top supervisor's pid,
+/// so the caller can monitor it. To put it under a supervisor of your own,
+/// reach for `supervised`.
+///
+/// One bot is one tree: starting the same bot twice over fails the second
+/// time, because its names are already registered to the first.
+pub fn start(bot: Bot) -> Result(Pid, actor.StartError) {
+  supervisor.start(tree(bot))
+  |> result.map(fn(started) { started.pid })
+}
+
+fn tree(bot: Bot) -> supervisor.Builder {
   let handle =
     api.new(
-      process.named_subject(limiter_name),
+      process.named_subject(bot.names.limiter),
       bot.rest,
       bot.transport.request,
     )
@@ -197,7 +240,7 @@ pub fn start(bot: Bot) -> Result(Pid, actor.StartError) {
 
   let limiter =
     supervision.worker(fn() {
-      limiter_actor.start(limiter_name, bot.transport.now, fn(notice) {
+      limiter_actor.start(bot.names.limiter, bot.transport.now, fn(notice) {
         report(status.Paced(notice))
       })
     })
@@ -205,16 +248,16 @@ pub fn start(bot: Bot) -> Result(Pid, actor.StartError) {
   let handlers =
     factory.worker_child(handler_child)
     |> factory.restart_strategy(supervision.Temporary)
-    |> factory.named(handlers_name)
+    |> factory.named(bot.names.handlers)
     |> factory.supervised
 
   let shard =
     supervision.worker(fn() {
       runtime.start(
-        shard_name,
+        bot.names.shard,
         bot.gateway,
         bot.transport,
-        handlers_name,
+        bot.names.handlers,
         deliver,
         report,
       )
@@ -225,8 +268,6 @@ pub fn start(bot: Bot) -> Result(Pid, actor.StartError) {
   |> supervisor.add(limiter)
   |> supervisor.add(handlers)
   |> supervisor.add(shard)
-  |> supervisor.start
-  |> result.map(fn(started) { started.pid })
 }
 
 /// Linked to the factory supervisor, so a handler that crashes is logged by

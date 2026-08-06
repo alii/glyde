@@ -7,6 +7,7 @@ import gleam/http/response.{type Response}
 import gleam/json
 import gleam/list
 import gleam/option.{None}
+import gleam/otp/static_supervisor as supervisor
 import gleeunit
 import glyde
 import glyde/embed
@@ -260,6 +261,39 @@ pub fn a_crashing_handler_does_not_take_the_shard_test() {
 
   await(inbox, handlers: 1)
   assert list.contains(booklet.get(log), Saw("second ran"))
+}
+
+/// The same scripted session, run as a child of someone else's tree — which
+/// is how anything with more than a bot in it will start glyde.
+///
+/// The names it registers under come off the bot value rather than out of the
+/// start, so the child specification can be restarted for as long as the VM
+/// lives. A tree that minted its own would burn three uncollectable atoms on
+/// every restart instead.
+pub fn a_supervised_session_test() {
+  let log = booklet.new([])
+  let inbox = process.new_subject()
+
+  let bot =
+    glyde.new(
+      token: frames.token,
+      intents: intents.new([intents.Guilds, intents.GuildMessages]),
+    )
+    |> glyde.with_transport(scripted(log, fn(_) { created() }))
+    |> glyde.on_status(signal_halt(inbox))
+    |> glyde.on_ready(fn(_api, _ready) { process.send(inbox, Done) })
+    |> glyde.on_message(fn(_api, msg) {
+      did(log, Saw("supervised saw " <> msg.content))
+      process.send(inbox, Done)
+    })
+
+  let assert Ok(_) =
+    supervisor.new(supervisor.OneForOne)
+    |> supervisor.add(glyde.supervised(bot))
+    |> supervisor.start
+
+  await(inbox, handlers: 3)
+  assert list.contains(booklet.get(log), Saw("supervised saw !ping"))
 }
 
 fn first_id() -> id.MessageId {

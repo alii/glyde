@@ -56,6 +56,20 @@ handler processes, and a shard actor holding the socket. The shard actor loops
 one turn at a time: find the timer due soonest, wait that long on the socket,
 feed the core whatever came back, spawn a handler process for each dispatch.
 
+To put that tree under one of your own, add `glyde.supervised(bot)`:
+
+```gleam
+supervisor.new(supervisor.OneForOne)
+|> supervisor.add(glyde.supervised(bot))
+|> supervisor.start
+```
+
+Restarting it is safe. `glyde.new` mints the three process names the tree
+registers under and keeps them on the bot value, so a restart lands on the same
+three — build the bot once, at startup, and hold it. (A tree that minted its own
+names per start would burn three atoms every restart, and atoms are never
+collected, so it would eventually take the VM down.)
+
 `glyde/transport` is the platform half, four functions wide: open a socket, send
 an HTTP request, read the clock, wait. `glyde.with_transport` swaps it, so the
 same bot runs over a proxy, a recording double, or a script with no network at
