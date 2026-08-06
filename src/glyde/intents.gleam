@@ -134,7 +134,7 @@ pub fn is_privileged(intent: Intent) -> Bool {
   }
 }
 
-pub fn new(intents: List(Intent)) -> Intents {
+pub fn new(intents intents: List(Intent)) -> Intents {
   list.fold(intents, Intents(0), add)
 }
 

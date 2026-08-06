@@ -124,7 +124,11 @@ pub fn union_test() {
 
 pub fn privileged_in_names_what_needs_the_portal_test() {
   let set =
-    intents.new([intents.Guilds, intents.MessageContent, intents.GuildMembers])
+    intents.new(intents: [
+      intents.Guilds,
+      intents.MessageContent,
+      intents.GuildMembers,
+    ])
   assert intents.privileged_in(set)
     == [intents.GuildMembers, intents.MessageContent]
   assert intents.privileged_in(intents.new([intents.Guilds])) == []
