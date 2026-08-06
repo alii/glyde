@@ -8,7 +8,7 @@ Glyde is currently pre-1.0.0 release, so please try it out but be wary of paperc
 gleam add glyde
 ```
 
-Here's an example bot that answers `!ping`:
+Here's a bot that answers `!ping`:
 
 ```gleam
 import envoy
@@ -52,49 +52,73 @@ pub fn main() -> Nil {
 
 Run it with `DISCORD_TOKEN=... gleam run`.
 
-Add your web server, your database pool and anything else to that same
-supervisor. The one rule is to build the bot once and hold the value, like
-above. Calling `glyde.new` again on every restart would leak memory.
+The bot value is built once and reused. `glyde.new` registers process names as
+atoms, which are never garbage collected, so building a new bot on every
+restart will exhaust the atom table.
 
-`glyde.start` is the same thing without a supervisor above it. It hands you a
-pid and nothing restarts the bot, so it is really only for tests and for
-poking around.
+Everything else your app runs goes in the same supervisor.
 
-Intents are what Discord will send you. `MessageContent` and the two members
-ones have to be turned on in your app's settings page first, or the connection
-gets closed as soon as it opens.
+`glyde.start` starts the same tree without a supervisor above it and returns a
+pid.
 
-The handlers you can add:
+Intents control which events Discord sends. `MessageContent` and the two
+member intents have to be enabled on your app's settings page, or the gateway
+closes the connection immediately.
 
-|                  |                                                           |
-| ---------------- | --------------------------------------------------------- |
-| `on_message`     | someone posted a message                                  |
-| `on_interaction` | a slash command, a button, autocomplete                   |
-| `on_ready`       | connected, and here is who you are                        |
-| `on_event`       | everything, if you want to match on it yourself           |
-| `on_status`      | the library itself: connecting, reconnecting, rate limits |
+Handlers:
 
-Each event runs in its own process, so one slow or crashing handler does not
-hold up the next message.
+| handler          | fires on                                       |
+| ---------------- | ---------------------------------------------- |
+| `on_message`     | someone posted a message                       |
+| `on_interaction` | a slash command, a button, autocomplete        |
+| `on_ready`       | connected, with the bot's own user and guilds  |
+| `on_event`       | every dispatch, decoded, to match on yourself  |
+| `on_status`      | glyde itself: connects, reconnects, rate limits |
 
-## Watching what it does
+Each event runs in its own process, so a slow or crashing handler does not
+delay the next one.
 
-By default glyde prints connects, reconnects and fatal errors to stderr. Swap
-that for your own logging with `on_status`:
+## Keeping state
+
+Handlers run in a fresh process each time, so there is nowhere to keep a
+counter. Run your own actor and have the handler close over its name:
 
 ```gleam
-import glyde/status
+let pongs = process.new_name("pongs")
 
+let bot =
+  glyde.new(token:, intents:)
+  |> glyde.on_message(fn(api, msg) {
+    let count = actor.call(process.named_subject(pongs), 1000, Bump)
+    ...
+  })
+
+supervisor.new(supervisor.OneForOne)
+|> supervisor.add(counter.supervised(pongs))
+|> supervisor.add(glyde.supervised(bot))
+|> supervisor.start
+```
+
+It has to be a name rather than a subject, so the handlers still find the
+actor after it crashes and restarts. This is the same reason glyde keeps its
+own names on the bot value.
+
+## Status
+
+glyde writes connects, reconnects and fatal errors to stderr. Replace that
+with your own logging:
+
+```gleam
 |> glyde.on_status(fn(it) { log(status.describe(it)) })
 ```
 
-You get told when the connection drops and why, when it is coming back, and
-when Discord is rate limiting you. `Halted` means it is not coming back: a bad
-token, or intents you have not enabled.
+A status reports why a connection dropped, when the next attempt is due, and
+when Discord is rate limiting you. `Halted` means the bot will not reconnect:
+a bad token, or an intent that is not enabled.
 
 ## Calling the API
 
-Every handler is given an `api`. Pass it to any of the endpoint functions.
+Every handler is given an `api`. Pass it to any endpoint function:
 
 ```gleam
 |> glyde.on_message(fn(api, msg) {
@@ -105,23 +129,21 @@ Every handler is given an `api`. Pass it to any of the endpoint functions.
 })
 ```
 
-Calls come back as a `Result`. An error is one of three things: Discord said no,
-nothing answered at all, or the rate limiter refused to send it.
-`api.describe_failure` turns any of them into a line you can log. Rate limits
-are waited out for you, so you do not need to retry on a 429.
+Endpoints return a `Result`. A failure is either a refusal from Discord, no
+answer at all, or the rate limiter declining to send, and
+`api.describe_failure` renders all of them. A 429 is waited out and retried
+before it reaches you.
 
-There are around 80 endpoints, one module per thing: `glyde/message`,
+There are about 80 endpoints, grouped by noun: `glyde/message`,
 `glyde/channel`, `glyde/guild`, `glyde/member`, `glyde/role`, `glyde/user`,
-`glyde/webhook`, `glyde/application_command`, `glyde/interaction`. Each one
-holds the type, the builders and the endpoints for that thing.
+`glyde/webhook`, `glyde/application_command`, `glyde/interaction`. Each module
+holds its type, its builders and its endpoints.
 
-IDs are typed by what they point at, so you cannot pass a channel ID where a
-message ID goes.
+IDs are typed, so a `ChannelId` does not fit where a `MessageId` goes.
 
 ## Slash commands
 
-Register them once you are connected. Discord replaces by name, so running this
-on every boot is fine.
+Register them on ready. Discord upserts by name, so this is safe on every boot.
 
 ```gleam
 |> glyde.on_ready(fn(api, ready) {
@@ -141,31 +163,31 @@ on every boot is fine.
 })
 ```
 
-You have three seconds to respond. If your answer takes longer than that, call
-`interaction.defer` first and `interaction.edit_response` when you are done.
+The first response is due within three seconds. If the answer takes longer to
+build, call `interaction.defer` first and `interaction.edit_response` when it
+is ready.
 
-New global commands can take up to an hour to show up the first time. Guild
-commands appear immediately, which is nicer while you are developing.
+A new global command can take an hour to appear. Guild commands appear
+immediately, which is more useful during development.
 
 The full version is in `examples/slash_command`.
 
 ## Testing
 
 `glyde.with_transport` replaces the socket, the HTTP client and the clock, so
-you can run a whole session with no network. `glyde/testing` has the pieces for
-writing one. `test/glyde_test.gleam` is a working example.
+a whole session runs with no network. `glyde/testing` has the parts and
+`test/glyde_test.gleam` puts them together.
 
-The protocol underneath is a plain function from state and input to state and
-outputs, in `glyde/gateway`. If you want to drive the connection yourself
-rather than use the supervision tree above, `glyde/client` is that layer, and
-`glyde/rest` builds requests as values you can send with any HTTP client.
+The protocol underneath is a pure function from state and input to state and
+outputs, in `glyde/gateway`. `glyde/client` drives it for a caller who wants
+to own the processes, and `glyde/rest` turns endpoints into request values
+that any HTTP client can send.
 
 ## Not included
 
-**Voice.** No audio yet.
+No voice: no audio and no UDP.
 
-**Caching.** Nothing is kept in memory. Events arrive decoded and it is up to
-you where they go.
+No cache. Events arrive decoded, and where they go after that is up to you.
 
-**Sharding.** One connection per bot. That is good for a few thousand guilds.
-The state machines for a bigger fleet are in the library, but the wiring is not.
+One connection per bot, which is enough for a few thousand guilds. The state
+machines for a sharded fleet are in the library, but the wiring is not.
