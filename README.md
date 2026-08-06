@@ -53,9 +53,8 @@ pub fn main() -> Nil {
 Run it with `DISCORD_TOKEN=... gleam run`.
 
 Add your web server, your database pool and anything else to that same
-supervisor. The one rule is the comment above `bot`: build it once and hold the
-value. Calling `glyde.new` again on every restart leaks memory the VM never
-gives back.
+supervisor. The one rule is to build the bot once and hold the value, like
+above. Calling `glyde.new` again on every restart would leak memory.
 
 `glyde.start` is the same thing without a supervisor above it. It hands you a
 pid and nothing restarts the bot, so it is really only for tests and for
