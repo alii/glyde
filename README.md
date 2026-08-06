@@ -1,6 +1,6 @@
 # glyde
 
-A Discord library for Gleam
+A Discord library for Gleam.
 
 Glyde is currently pre-1.0.0 release, so please try it out but be wary of papercuts.
 
@@ -11,11 +11,11 @@ gleam add glyde
 Here's an example bot that answers `!ping`:
 
 ```gleam
-//// A Discord bot that answers "!ping" with "pong!".
-
 import envoy
 import gleam/bool
+import gleam/erlang/process
 import gleam/io
+import gleam/otp/static_supervisor as supervisor
 import glyde
 import glyde/intents
 import glyde/message
@@ -23,127 +23,150 @@ import glyde/message
 pub fn main() -> Nil {
   let assert Ok(token) = envoy.get("DISCORD_TOKEN")
 
-  glyde.new(
-    token:,
-    intents: intents.new([
-      intents.Guilds,
-      intents.GuildMessages,
-      intents.MessageContent,
-    ]),
-  )
-  |> glyde.on_ready(fn(_api, ready) {
-    io.println("logged in as " <> ready.me.user.username)
-  })
-  |> glyde.on_message(fn(api, msg) {
-    use <- bool.guard(msg.content != "!ping", Nil)
-    let _ = message.reply(api, msg, message.text("pong!"))
-    Nil
-  })
-  |> glyde.run
+  let bot =
+    glyde.new(
+      token:,
+      intents: intents.new([
+        intents.Guilds,
+        intents.GuildMessages,
+        intents.MessageContent,
+      ]),
+    )
+    |> glyde.on_ready(fn(_api, ready) {
+      io.println("logged in as " <> ready.me.user.username)
+    })
+    |> glyde.on_message(fn(api, msg) {
+      use <- bool.guard(msg.content != "!ping", Nil)
+      let _ = message.reply(api, msg, message.text("pong!"))
+      Nil
+    })
+
+  let assert Ok(_) =
+    supervisor.new(supervisor.OneForOne)
+    |> supervisor.add(glyde.supervised(bot))
+    |> supervisor.start
+
+  process.sleep_forever()
 }
 ```
 
-That is `examples/ping_pong`, whole file.
+Run it with `DISCORD_TOKEN=... gleam run`.
 
-Each event is handed to a fresh process under a supervisor, so a slow or
-crashing handler never holds up the next one. An endpoint call blocks that one
-process on the rate limiter and the network; the shard keeps reading.
+Add your web server, your database pool and anything else to that same
+supervisor. The one rule is the comment above `bot`: build it once and hold the
+value. Calling `glyde.new` again on every restart leaks memory the VM never
+gives back.
 
-## The runtime
+`glyde.start` is the same thing without a supervisor above it. It hands you a
+pid and nothing restarts the bot, so it is really only for tests and for
+poking around.
 
-`run` starts a small OTP tree: a rate-limiter actor, a factory supervisor for
-handler processes, and a shard actor holding the socket. The shard actor loops
-one turn at a time: find the timer due soonest, wait that long on the socket,
-feed the core whatever came back, spawn a handler process for each dispatch.
+Intents are what Discord will send you. `MessageContent` and the two members
+ones have to be turned on in your app's settings page first, or the connection
+gets closed as soon as it opens.
 
-To put that tree under one of your own, add `glyde.supervised(bot)`:
+The handlers you can add:
 
-```gleam
-supervisor.new(supervisor.OneForOne)
-|> supervisor.add(glyde.supervised(bot))
-|> supervisor.start
-```
+|                  |                                                           |
+| ---------------- | --------------------------------------------------------- |
+| `on_message`     | someone posted a message                                  |
+| `on_interaction` | a slash command, a button, autocomplete                   |
+| `on_ready`       | connected, and here is who you are                        |
+| `on_event`       | everything, if you want to match on it yourself           |
+| `on_status`      | the library itself: connecting, reconnecting, rate limits |
 
-Restarting it is safe. `glyde.new` mints the three process names the tree
-registers under and keeps them on the bot value, so a restart lands on the same
-three — build the bot once, at startup, and hold it. (A tree that minted its own
-names per start would burn three atoms every restart, and atoms are never
-collected, so it would eventually take the VM down.)
+Each event runs in its own process, so one slow or crashing handler does not
+hold up the next message.
 
-`glyde/transport` is the platform half, four functions wide: open a socket, send
-an HTTP request, read the clock, wait. `glyde.with_transport` swaps it, so the
-same bot runs over a proxy, a recording double, or a script with no network at
-all. `test/glyde_test.gleam` drives a whole session that way.
+## Watching what it does
 
-Below the shard actor is `glyde/client`. Give it six functions, open, send,
-close, drop, arm a timer and cancel one, and it runs the state machine's outputs
-against them. That is where sharding, compression and a fleet's shared identify
-queue live.
-
-## The core does no IO
-
-`gateway.step(shard, input)` is total and returns the next shard plus the
-outputs to perform, so a protocol rule is a row in a table with no socket to
-fake and no clock to hold still:
+By default glyde prints connects, reconnects and fatal errors to stderr. Swap
+that for your own logging with `on_status`:
 
 ```gleam
-pub fn hello_queues_for_an_identify_slot_test() {
-  let shard = greeting()
-  let Step(shard: after, outputs:) = frame(shard, hello())
-  assert outputs
-    == [
-      CancelTimer(gateway.Handshake),
-      ArmTimer(gateway.Heartbeat, 0, Stamp(7)),
-      RequestIdentifySlot(Conn(5)),
-      Note(gateway.AwaitingIdentifySlot),
-    ]
-  assert phase(after)
-    == Queued(Beat(interval_ms: interval, unacked: 0, quiet: False))
-}
+import glyde/status
+
+|> glyde.on_status(fn(it) { log(status.describe(it)) })
 ```
 
-## A REST call is a value
+You get told when the connection drops and why, when it is coming back, and
+when Discord is rate limiting you. `Halted` means it is not coming back: a bad
+token, or intents you have not enabled.
 
-`rest.request(config, call)` hands you a `gleam_http` request. Send it with
-whatever client you already have, then give the answer back to the call it came
-from, which carries the decoder for that endpoint.
+## Calling the API
+
+Every handler is given an `api`. Pass it to any of the endpoint functions.
 
 ```gleam
-let call =
-  message.send(
-    channel_id,
-    message.text("shipped")
-      |> message.embed(embed.new() |> embed.title("v0.1.0")),
-  )
-
-let request = rest.request(rest.config(rest.bot(token)), call)
-// send it however you like, then:
-let posted = rest.response(call, status:, headers:, body:)
+|> glyde.on_message(fn(api, msg) {
+  case message.reply(api, msg, message.text("hi")) {
+    Ok(sent) -> io.println("sent as " <> id.to_string(sent.id))
+    Error(_) -> io.println_error("could not reply")
+  }
+})
 ```
 
-`rest.route(call)` gives that call's rate-limit identity without building a
-request at all, which is what `glyde/rest/limiter` schedules on. The limiter is
-a state machine too: it says when to send and what a 429 means, it does not
-sleep and it does not retry behind your back.
+Calls come back as a `Result`. An error is one of three things: Discord said no,
+nothing answered at all, or the rate limiter refused to send it.
+`api.describe_failure` turns any of them into a line you can log. Rate limits
+are waited out for you, so you do not need to retry on a 429.
 
-80 endpoints, covering channels and messages, guilds, members, roles, threads,
-application commands, interactions, webhooks and users. Each noun is one
-module: `glyde/message` holds the received type, the `Draft` and `Edit`
-builders, and every endpoint that acts on a message. `message.to_body` writes
-the `attachments` cross-reference for any file on the draft, which a
-hand-written JSON object silently does not. Ids are tagged by what they
-identify, so the two snowflakes in `/channels/{channel_id}/messages/{message_id}`
-cannot be swapped.
+There are around 80 endpoints, one module per thing: `glyde/message`,
+`glyde/channel`, `glyde/guild`, `glyde/member`, `glyde/role`, `glyde/user`,
+`glyde/webhook`, `glyde/application_command`, `glyde/interaction`. Each one
+holds the type, the builders and the endpoints for that thing.
 
-## What is not in it
+IDs are typed by what they point at, so you cannot pass a channel ID where a
+message ID goes.
 
-**No voice.** `UpdateVoiceState` is there because it is a gateway command, but
-there is no voice gateway, no UDP and no audio.
+## Slash commands
 
-**No cache.** Nothing holds on to a guild, a channel or a member. Events arrive
-decoded and go wherever you put them.
+Register them once you are connected. Discord replaces by name, so running this
+on every boot is fine.
 
-**No processes.** Not in the core and not in the runtime: the loop is one
-tail-recursive function. That also means no fleet. A fleet wants a supervisor, a
-process per shard and one `glyde/identify_queue` for the whole bot; glyde ships
-the state machines for that, not the wiring.
+```gleam
+|> glyde.on_ready(fn(api, ready) {
+  let assert Some(app) = ready.application
+  let hello = command.new_chat_input(name: "hello", description: "say hello")
+  let _ = command.create_global_command(api, app.id, command.global(hello))
+  Nil
+})
+|> glyde.on_interaction(fn(api, it) {
+  case it.data {
+    interaction.CommandData(name: "hello", ..) -> {
+      let _ = interaction.respond(api, it, message.text("hello!"))
+      Nil
+    }
+    _ -> Nil
+  }
+})
+```
+
+You have three seconds to respond. If your answer takes longer than that, call
+`interaction.defer` first and `interaction.edit_response` when you are done.
+
+New global commands can take up to an hour to show up the first time. Guild
+commands appear immediately, which is nicer while you are developing.
+
+The full version is in `examples/slash_command`.
+
+## Testing
+
+`glyde.with_transport` replaces the socket, the HTTP client and the clock, so
+you can run a whole session with no network. `glyde/testing` has the pieces for
+writing one. `test/glyde_test.gleam` is a working example.
+
+The protocol underneath is a plain function from state and input to state and
+outputs, in `glyde/gateway`. If you want to drive the connection yourself
+rather than use the supervision tree above, `glyde/client` is that layer, and
+`glyde/rest` builds requests as values you can send with any HTTP client.
+
+## Not included
+
+**Voice.** No audio yet.
+
+**Caching.** Nothing is kept in memory. Events arrive decoded and it is up to
+you where they go.
+
+**Sharding.** One connection per bot. That is good for a few thousand guilds.
+The state machines for a bigger fleet are in the library, but the wiring is not.

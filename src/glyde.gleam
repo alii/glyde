@@ -4,18 +4,27 @@
 ////
 //// ```gleam
 //// import gleam/bool
+//// import gleam/erlang/process
+//// import gleam/otp/static_supervisor as supervisor
 //// import glyde
 //// import glyde/intents
 //// import glyde/message
 ////
 //// pub fn main() -> Nil {
-////   glyde.new(token:, intents: intents.new([intents.GuildMessages]))
-////   |> glyde.on_message(fn(api, msg) {
-////     use <- bool.guard(msg.content != "!ping", Nil)
-////     let _ = message.reply(api, msg, message.text("pong!"))
-////     Nil
-////   })
-////   |> glyde.run
+////   let bot =
+////     glyde.new(token:, intents: intents.new([intents.GuildMessages]))
+////     |> glyde.on_message(fn(api, msg) {
+////       use <- bool.guard(msg.content != "!ping", Nil)
+////       let _ = message.reply(api, msg, message.text("pong!"))
+////       Nil
+////     })
+////
+////   let assert Ok(_) =
+////     supervisor.new(supervisor.OneForOne)
+////     |> supervisor.add(glyde.supervised(bot))
+////     |> supervisor.start
+////
+////   process.sleep_forever()
 //// }
 //// ```
 ////
@@ -215,11 +224,19 @@ pub fn supervised(
 }
 
 /// Build the supervision tree and start it. Returns the top supervisor's pid,
-/// so the caller can monitor it. To put it under a supervisor of your own,
-/// reach for `supervised`.
+/// so the caller can monitor it. Nothing here blocks, so a `main` that has
+/// nothing else to do wants `process.sleep_forever()` after it.
+///
+/// Prefer `supervised` when there is a tree of your own to hang this under,
+/// which is what makes a dead bot come back.
 ///
 /// One bot is one tree: starting the same bot twice over fails the second
 /// time, because its names are already registered to the first.
+///
+/// A bad token or a disallowed intent stops the shard for good rather than
+/// reconnecting. Nothing restarts it, and nothing exits on your behalf: watch
+/// `status.Halted` through `on_status` if the program should come down with
+/// it.
 pub fn start(bot: Bot) -> Result(Pid, actor.StartError) {
   supervisor.start(tree(bot))
   |> result.map(fn(started) { started.pid })
@@ -275,26 +292,4 @@ fn tree(bot: Bot) -> supervisor.Builder {
 fn handler_child(job: runtime.Job) -> actor.StartResult(Nil) {
   let pid = process.spawn(job)
   Ok(actor.Started(pid:, data: Nil))
-}
-
-/// Start the tree and block until the shard halts. What `main` calls: a bad
-/// token or disallowed intents come back as `Nil` rather than a hung process.
-pub fn run(bot: Bot) -> Nil {
-  let halted = process.new_subject()
-  let report = bot.status
-  let bot =
-    Bot(..bot, status: fn(it) {
-      report(it)
-      case it {
-        status.Halted(_) -> process.send(halted, Nil)
-        _ -> Nil
-      }
-    })
-  case start(bot) {
-    Ok(pid) -> {
-      process.receive_forever(halted)
-      process.send_exit(pid)
-    }
-    Error(_) -> Nil
-  }
 }

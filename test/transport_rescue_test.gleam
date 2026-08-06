@@ -1,5 +1,5 @@
 //// `gleam_httpc` raises for any httpc failure it has not modelled. Out of
-//// `glyde.run` that kills the OS process and takes a live gateway session, its
+//// `glyde.start` that kills the OS process and takes a live gateway session, its
 //// id and its resume state with it, so the raise stops in the transport.
 
 import gleam/http

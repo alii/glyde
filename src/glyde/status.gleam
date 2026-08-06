@@ -1,4 +1,4 @@
-//// What the runtime under `glyde.run` reports that is not a Discord event, and
+//// What the runtime under `glyde.start` reports that is not a Discord event, and
 //// the words for it. `glyde.on_status` hands you a `Status`; `describe` is the
 //// whole line the default prints, and the smaller functions are its pieces
 //// for a handler that formats the rest itself.
