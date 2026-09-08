@@ -10,6 +10,7 @@
 
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
+import gleam/httpc
 import gleam/option.{type Option}
 import glyde/websocket/sendcode
 
@@ -18,7 +19,7 @@ import glyde/websocket/sendcode
 pub type Unreachable {
   /// No connection at all: a name that does not resolve, a refused port, a TLS
   /// handshake that failed.
-  ConnectFailed(detail: String)
+  ConnectFailed(ip4: httpc.ConnectError, ip6: httpc.ConnectError)
 
   /// The request went out and nothing came back in time.
   TimedOut
@@ -104,9 +105,21 @@ pub type Socket {
 /// One line per reason, for a host that just wants to print it.
 pub fn describe(reason: Unreachable) -> String {
   case reason {
-    ConnectFailed(detail:) -> "could not connect: " <> detail
+    ConnectFailed(ip4:, ip6:) ->
+      "could not connect: "
+      <> "IPv4 "
+      <> connect_detail(ip4)
+      <> ", IPv6: "
+      <> connect_detail(ip6)
     TimedOut -> "no answer in time"
     Unreadable -> "the answer was not a readable HTTP response"
     Other(detail:) -> detail
+  }
+}
+
+fn connect_detail(error: httpc.ConnectError) -> String {
+  case error {
+    httpc.Posix(code:) -> code
+    httpc.TlsAlert(code:, detail:) -> code <> ", " <> detail
   }
 }

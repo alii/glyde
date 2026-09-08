@@ -92,19 +92,9 @@ fn send(built: Request(BitArray)) -> Answer {
 
 fn unreachable(failure: httpc.HttpError) -> transport.Unreachable {
   case failure {
-    httpc.FailedToConnect(ip4:, ip6:) ->
-      transport.ConnectFailed(
-        "IPv4 " <> connect_detail(ip4) <> ", IPv6 " <> connect_detail(ip6),
-      )
+    httpc.FailedToConnect(ip4:, ip6:) -> transport.ConnectFailed(ip4, ip6)
     httpc.ResponseTimeout -> transport.TimedOut
     httpc.InvalidUtf8Response -> transport.Unreadable
-  }
-}
-
-fn connect_detail(error: httpc.ConnectError) -> String {
-  case error {
-    httpc.Posix(code:) -> code
-    httpc.TlsAlert(code:, detail:) -> code <> ", " <> detail
   }
 }
 
