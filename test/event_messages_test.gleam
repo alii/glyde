@@ -20,7 +20,8 @@ fn decoded(name: String, text: String) -> event.Event {
 
 const a_user = "{\"id\":\"70\",\"username\":\"ada\"}"
 
-const a_message = "{\"id\":\"30\",\"channel_id\":\"20\",\"author\":"
+const a_message =
+  "{\"id\":\"30\",\"channel_id\":\"20\",\"author\":"
   <> a_user
   <> ",\"content\":\"hi\"}"
 

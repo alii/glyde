@@ -802,18 +802,19 @@ pub type NoncePolicy {
   UseNonce(value: Nonce, enforce: Bool)
 }
 
-const empty = Draft(
-  content: None,
-  embeds: [],
-  components: [],
-  sticker_ids: [],
-  files: [],
-  allowed_mentions: None,
-  reference: None,
-  tts: False,
-  nonce: NoNonce,
-  flags: no_flags,
-)
+const empty =
+  Draft(
+    content: None,
+    embeds: [],
+    components: [],
+    sticker_ids: [],
+    files: [],
+    allowed_mentions: None,
+    reference: None,
+    tts: False,
+    nonce: NoNonce,
+    flags: no_flags,
+  )
 
 /// An empty draft, to pipe setters onto.
 pub fn new() -> Draft {

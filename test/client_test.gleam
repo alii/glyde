@@ -105,7 +105,8 @@ const interval = 41_250
 
 const handshake_ms = 30_000
 
-const identify = "{\"op\":2,\"d\":{\"token\":\"tok\",\"properties\":{\"os\":\"test\",\"browser\":\"glyde\",\"device\":\"glyde\"},\"compress\":false,\"large_threshold\":50,\"shard\":[0,1],\"intents\":0}}"
+const identify =
+  "{\"op\":2,\"d\":{\"token\":\"tok\",\"properties\":{\"os\":\"test\",\"browser\":\"glyde\",\"device\":\"glyde\"},\"compress\":false,\"large_threshold\":50,\"shard\":[0,1],\"intents\":0}}"
 
 /// The properties are pinned so an IDENTIFY assertion can name them.
 fn conf() -> gateway.Config {

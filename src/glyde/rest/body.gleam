@@ -83,9 +83,8 @@ pub type InvalidBoundary {
 
 /// Our own 40 characters. Long enough that a body containing it by accident is
 /// not a thing, and `encode` handles the body that contains it on purpose.
-pub const default_boundary: Boundary = Boundary(
-  "glydeBoundary7Zx3Qv9Kw1Mn5Bt2Rc8Yd4Hj6Fs",
-)
+pub const default_boundary: Boundary =
+  Boundary("glydeBoundary7Zx3Qv9Kw1Mn5Bt2Rc8Yd4Hj6Fs")
 
 /// A boundary of your own. RFC 2046 section 5.1.1: 1 to 70 characters of
 /// `A-Z a-z 0-9 '()+_,-./:=?` and space, and not a space at the end.

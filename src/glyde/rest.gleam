@@ -45,7 +45,8 @@ pub const base_url: String = "https://discord.com/api/v10"
 
 /// Discord's required shape; without it Cloudflare answers a misleading
 /// "invalid form body". Keep the version in step with `gleam.toml`.
-pub const user_agent: String = "DiscordBot (https://github.com/alii/glyde, 1.0.0)"
+pub const user_agent: String =
+  "DiscordBot (https://github.com/alii/glyde, 1.0.0)"
 
 /// Discord requires the boundary to be absent from the parts, not
 /// unpredictable, and `body.encode` grows this one when a part contains it.

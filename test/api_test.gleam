@@ -276,7 +276,8 @@ fn reactions_path() -> String {
 
 /// The five routes that name an emoji collapse to this template, so the emoji
 /// never earns a bucket of its own.
-const reaction_template: String = "/channels/{channel.id}/messages/{id}/reactions/{reaction}"
+const reaction_template: String =
+  "/channels/{channel.id}/messages/{id}/reactions/{reaction}"
 
 fn reaction_rows() -> List(Row) {
   [
@@ -786,7 +787,8 @@ fn guild_commands_path() -> String {
 
 const global_commands_template: String = "/applications/{id}/commands"
 
-const guild_commands_template: String = "/applications/{id}/guilds/{guild.id}/commands"
+const guild_commands_template: String =
+  "/applications/{id}/guilds/{guild.id}/commands"
 
 fn command_rows() -> List(Row) {
   [

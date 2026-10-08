@@ -65,7 +65,8 @@ const a_role = "{\"id\":\"80\",\"name\":\"mod\",\"permissions\":\"8\"}"
 
 const a_channel = "{\"id\":\"20\",\"type\":0,\"name\":\"general\"}"
 
-const a_message = "{\"id\":\"30\",\"channel_id\":\"20\",\"author\":"
+const a_message =
+  "{\"id\":\"30\",\"channel_id\":\"20\",\"author\":"
   <> a_user
   <> ",\"content\":\"hi\",\"type\":0}"
 

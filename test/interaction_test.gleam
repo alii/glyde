@@ -69,7 +69,8 @@ pub fn requires_id_application_id_type_and_token_test() {
     parse("{\"id\":\"1\",\"application_id\":\"2\",\"type\":1}")
 }
 
-const command_body: String = "{\"id\":\"3\",\"name\":\"blep\",\"type\":1,\"options\":[{\"name\":\"animal\",\"type\":3,\"value\":\"cat\"}]}"
+const command_body: String =
+  "{\"id\":\"3\",\"name\":\"blep\",\"type\":1,\"options\":[{\"name\":\"animal\",\"type\":3,\"value\":\"cat\"}]}"
 
 /// Types 2 and 4 send a byte-identical `data` object and mean opposite things.
 pub fn the_same_data_decodes_two_ways_by_envelope_type_test() {
@@ -1393,11 +1394,14 @@ fn built(call: rest.Call(a)) -> Request(body.Wire) {
   rest.request(rest.config(rest.unauthenticated()), call)
 }
 
-const callback_path: String = "/api/v10/interactions/846092147101974528/aW50ZXJhY3Rpb24udG9rZW4/callback"
+const callback_path: String =
+  "/api/v10/interactions/846092147101974528/aW50ZXJhY3Rpb24udG9rZW4/callback"
 
-const original_path: String = "/api/v10/webhooks/1234567890123456789/aW50ZXJhY3Rpb24udG9rZW4/messages/@original"
+const original_path: String =
+  "/api/v10/webhooks/1234567890123456789/aW50ZXJhY3Rpb24udG9rZW4/messages/@original"
 
-const followup_path: String = "/api/v10/webhooks/1234567890123456789/aW50ZXJhY3Rpb24udG9rZW4"
+const followup_path: String =
+  "/api/v10/webhooks/1234567890123456789/aW50ZXJhY3Rpb24udG9rZW4"
 
 pub fn respond_posts_a_type_4_callback_test() {
   let sent = built(interaction.respond_call(command(), message.text("hello")))

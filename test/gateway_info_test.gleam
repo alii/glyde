@@ -8,7 +8,8 @@ import glyde/internal/host
 import glyde/rest
 
 /// A real `GET /gateway/bot` response for a one-shard bot.
-const live_bot: String = "{\"url\":\"wss://gateway.discord.gg\",\"shards\":1,\"session_start_limit\":{\"max_concurrency\":1,\"remaining\":1000,\"reset_after\":0,\"total\":1000}}"
+const live_bot: String =
+  "{\"url\":\"wss://gateway.discord.gg\",\"shards\":1,\"session_start_limit\":{\"max_concurrency\":1,\"remaining\":1000,\"reset_after\":0,\"total\":1000}}"
 
 const url_only: String = "{\"url\":\"wss://gateway.discord.gg\"}"
 
