@@ -2,7 +2,7 @@
 //// client, one clock. `glyde.with_transport` swaps it for a proxy, a
 //// recording double, or a script in a test.
 ////
-//// Nothing here reaches Erlang or the gateway. Writing a transport must not
+//// Nothing here reaches the gateway. Writing a transport must not
 //// drag in the built-in one, which lives in `glyde/transport/erlang`.
 ////
 //// Not `glyde/client.Transport`, which is the six outputs of the pure state
@@ -109,7 +109,7 @@ pub fn describe(reason: Unreachable) -> String {
       "could not connect: "
       <> "IPv4 "
       <> connect_detail(ip4)
-      <> ", IPv6: "
+      <> ", IPv6 "
       <> connect_detail(ip6)
     TimedOut -> "no answer in time"
     Unreadable -> "the answer was not a readable HTTP response"
