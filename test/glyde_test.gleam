@@ -157,6 +157,76 @@ fn channel() -> id.ChannelId {
   id.from_string("1000000000000000002")
 }
 
+/// The typed handlers see only their own dispatch: a delete reaches
+/// `on_message_delete` and a reaction `on_reaction_add`, and neither reaches
+/// `on_message`.
+pub fn typed_handlers_get_their_own_dispatch_test() {
+  let log = booklet.new([])
+  let inbox = process.new_subject()
+  let channel_json = json.string("1000000000000000002")
+  let deleted =
+    json.object([
+      #("id", json.string("1000000000000000009")),
+      #("channel_id", channel_json),
+    ])
+  let reacted =
+    json.object([
+      #("user_id", json.string("1000000000000000003")),
+      #("channel_id", channel_json),
+      #("message_id", json.string("1000000000000000009")),
+      #(
+        "emoji",
+        json.object([#("id", json.null()), #("name", json.string("👍"))]),
+      ),
+      #("burst", json.bool(False)),
+      #("type", json.int(0)),
+    ])
+  let session = [
+    [transport.Opened],
+    [transport.TextMessage(frames.hello(41_250))],
+    [transport.TextMessage(frames.ready(1, "typed", "gateway.discord.gg"))],
+    [transport.TextMessage(frames.dispatch("MESSAGE_DELETE", 2, deleted))],
+    [
+      transport.TextMessage(frames.dispatch("MESSAGE_REACTION_ADD", 3, reacted)),
+    ],
+    [fatal()],
+  ]
+
+  let assert Ok(_) =
+    glyde.new(token: frames.token, intents: intents.new([intents.Guilds]))
+    |> glyde.with_transport(
+      transport.Transport(..scripted(log, fn(_) { created() }), open: fn(url) {
+        did(log, Dialled(url))
+        socket(log, session)
+      }),
+    )
+    |> glyde.on_status(signal_halt(inbox))
+    |> glyde.on_message(fn(_api, msg) {
+      did(log, Saw("message " <> msg.content))
+    })
+    |> glyde.on_message_delete(fn(_api, message_id, _channel, _guild) {
+      did(log, Saw("deleted " <> id.to_string(message_id)))
+    })
+    |> glyde.on_reaction_add(fn(_api, added) {
+      did(log, Saw("reacted " <> id.to_string(added.message_id)))
+    })
+    |> glyde.on_event(fn(_api, _event) { process.send(inbox, Done) })
+    |> glyde.start
+
+  // READY, the delete and the reaction, then the halt.
+  await(inbox, handlers: 3)
+
+  let steps = booklet.get(log)
+  assert list.contains(steps, Saw("deleted 1000000000000000009"))
+  assert list.contains(steps, Saw("reacted 1000000000000000009"))
+  assert !list.any(steps, fn(step) {
+    case step {
+      Saw("message " <> _) -> True
+      _ -> False
+    }
+  })
+}
+
 /// A 429 is the limiter's to deal with, not the handler's: `call` waits it out
 /// and sends again, and the handler only hears the answer that stuck.
 pub fn a_429_is_waited_out_and_retried_test() {

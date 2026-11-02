@@ -36,13 +36,16 @@
 
 import gleam/erlang/process.{type Pid}
 import gleam/list
+import gleam/option.{type Option}
 import gleam/otp/actor
 import gleam/otp/factory_supervisor as factory
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
 import gleam/result
 import glyde/api
+import glyde/channel
 import glyde/event
+import glyde/event/messages
 import glyde/gateway
 import glyde/id
 import glyde/intents.{type Intents}
@@ -50,6 +53,7 @@ import glyde/interaction
 import glyde/internal/limiter_actor
 import glyde/internal/runtime
 import glyde/internal/version
+import glyde/member
 import glyde/message
 import glyde/ready
 import glyde/rest
@@ -57,6 +61,7 @@ import glyde/status
 import glyde/token
 import glyde/transport
 import glyde/transport/erlang as erlang_transport
+import glyde/user
 
 /// The Discord API version glyde speaks, for both the gateway and REST.
 pub const api_version: Int = version.number
@@ -151,6 +156,115 @@ pub fn on_message(bot: Bot, handler: fn(Api, Message) -> a) -> Bot {
   case event {
     event.MessageCreate(message:) -> {
       handler(api, message)
+      Nil
+    }
+    _ -> Nil
+  }
+}
+
+/// Every MESSAGE_UPDATE. Discord sends only what changed, so the whole
+/// message is on it only when the edit carried one.
+pub fn on_message_edit(
+  bot: Bot,
+  handler: fn(Api, message.MessageUpdate) -> a,
+) -> Bot {
+  use api, event <- on_event(bot)
+  case event {
+    event.MessageUpdate(message: update) -> {
+      handler(api, update)
+      Nil
+    }
+    _ -> Nil
+  }
+}
+
+/// Every MESSAGE_DELETE: which message, in which channel, and the guild when
+/// it was not a DM.
+pub fn on_message_delete(
+  bot: Bot,
+  handler: fn(Api, id.MessageId, id.ChannelId, Option(id.GuildId)) -> a,
+) -> Bot {
+  use api, event <- on_event(bot)
+  case event {
+    event.MessageDelete(id: message_id, channel_id:, guild_id:) -> {
+      handler(api, message_id, channel_id, guild_id)
+      Nil
+    }
+    _ -> Nil
+  }
+}
+
+/// Every MESSAGE_REACTION_ADD. Needs `GuildMessageReactions` or
+/// `DirectMessageReactions`.
+pub fn on_reaction_add(
+  bot: Bot,
+  handler: fn(Api, messages.ReactionAdd) -> a,
+) -> Bot {
+  use api, event <- on_event(bot)
+  case event {
+    event.MessageReactionAdd(added) -> {
+      handler(api, added)
+      Nil
+    }
+    _ -> Nil
+  }
+}
+
+/// Every MESSAGE_REACTION_REMOVE, one user's one emoji.
+pub fn on_reaction_remove(
+  bot: Bot,
+  handler: fn(Api, messages.ReactionRemove) -> a,
+) -> Bot {
+  use api, event <- on_event(bot)
+  case event {
+    event.MessageReactionRemove(removed) -> {
+      handler(api, removed)
+      Nil
+    }
+    _ -> Nil
+  }
+}
+
+/// Every GUILD_MEMBER_ADD. Privileged: needs `GuildMembers`.
+pub fn on_member_join(
+  bot: Bot,
+  handler: fn(Api, id.GuildId, member.GuildMember) -> a,
+) -> Bot {
+  use api, event <- on_event(bot)
+  case event {
+    event.GuildMemberAdd(guild_id:, member:) -> {
+      handler(api, guild_id, member)
+      Nil
+    }
+    _ -> Nil
+  }
+}
+
+/// Every GUILD_MEMBER_REMOVE: left, kicked or banned. Privileged: needs
+/// `GuildMembers`.
+pub fn on_member_leave(
+  bot: Bot,
+  handler: fn(Api, id.GuildId, user.User) -> a,
+) -> Bot {
+  use api, event <- on_event(bot)
+  case event {
+    event.GuildMemberRemove(guild_id:, user:) -> {
+      handler(api, guild_id, user)
+      Nil
+    }
+    _ -> Nil
+  }
+}
+
+/// Every THREAD_CREATE.
+pub fn on_thread_create(
+  bot: Bot,
+  handler: fn(Api, channel.Channel) -> a,
+) -> Bot {
+  use api, event <- on_event(bot)
+  case event {
+    event.ThreadCreate(channel: thread) -> {
+      handler(api, thread)
       Nil
     }
     _ -> Nil
