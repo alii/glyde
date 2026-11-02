@@ -135,6 +135,28 @@ pub fn a_reply_carries_its_embed_to_the_wire_test() {
     <> "\"fail_if_not_exists\":true}}"
 }
 
+/// `glyde.api` is the handlers' `Api`, usable from a process that is not one:
+/// a call made through it goes out paced by the same limiter.
+pub fn api_calls_from_outside_a_handler_test() {
+  let log = booklet.new([])
+  let inbox = process.new_subject()
+  let bot =
+    glyde.new(token: frames.token, intents: intents.new([intents.Guilds]))
+    |> glyde.with_transport(scripted(log, fn(_) { created() }))
+    |> glyde.on_status(signal_halt(inbox))
+
+  let assert Ok(_) = glyde.start(bot)
+  let assert Ok(posted) =
+    message.send(glyde.api(bot), channel(), message.text("from outside"))
+
+  assert posted.id == id.from_string("1000000000000000004")
+  assert list.contains(booklet.get(log), Posted(messages_path))
+}
+
+fn channel() -> id.ChannelId {
+  id.from_string("1000000000000000002")
+}
+
 /// A 429 is the limiter's to deal with, not the handler's: `call` waits it out
 /// and sends again, and the handler only hears the answer that stuck.
 pub fn a_429_is_waited_out_and_retried_test() {

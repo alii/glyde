@@ -242,13 +242,23 @@ pub fn start(bot: Bot) -> Result(Pid, actor.StartError) {
   |> result.map(fn(started) { started.pid })
 }
 
+/// The same `Api` every handler is given, for making REST calls from outside
+/// one: an HTTP endpoint, a timer, another actor.
+///
+/// It reaches the rate limiter by the bot's name rather than by a process, so
+/// it keeps working across restarts and is shared with the handlers' calls.
+/// Calls through it need the bot's tree to be running: with no limiter
+/// registered under that name, `api.execute` raises.
+pub fn api(bot: Bot) -> Api {
+  api.new(
+    process.named_subject(bot.names.limiter),
+    bot.rest,
+    bot.transport.request,
+  )
+}
+
 fn tree(bot: Bot) -> supervisor.Builder {
-  let handle =
-    api.new(
-      process.named_subject(bot.names.limiter),
-      bot.rest,
-      bot.transport.request,
-    )
+  let handle = api(bot)
   let listeners = bot.listeners
   let deliver = fn(event: Event) -> runtime.Job {
     fn() { list.each(listeners, fn(listen) { listen(handle, event) }) }
